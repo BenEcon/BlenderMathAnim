@@ -14,14 +14,16 @@ from geometry_nodes.nodes import MeshLine, Grid, InstanceOnPoints, IcoSphere, Se
     ConvexHull, \
     RayCast, BooleanMath, InsideConvexHull, DeleteGeometry, NamedAttribute, VectorMath, ScaleElements, make_function, \
     Rotation, Transpose, LinearMap, TransformGeometry, layout, CubeMesh, InsideConvexHull3D, CombineXYZ, E8Node, Matrix, \
-    ProjectionMap, DomainSize, SampleIndex, RepeatZone, MergeByDistance, MeshToPoints, Simulation
+    ProjectionMap, DomainSize, SampleIndex, RepeatZone, MergeByDistance, MeshToPoints, Simulation, SceneTime, Switch, \
+    MathNode
 from interface.ibpy import Vector, create_group_from_vector_function, if_node, get_color_from_string, make_new_socket, \
     get_material, create_group_from_scalar_function
 from appearance.textures import penrose_material, create_material_for_e8_visuals, star_color, decay_mode_material, \
-    z_gradient
+    z_gradient, gradient_from_attribute
 from mathematics.groups.e8 import E8Lattice
 from mathematics.mathematica.mathematica import choose, tuples
 from physics.constants import decay_modes
+from utils.constants import FRAME_RATE
 from utils.utils import flatten
 
 
@@ -44,7 +46,7 @@ def get_parameter(node_group, node_name, input=None, output=None):
             return node.outputs[output]
 
 
-def setup_geometry_nodes(name,group_input=False):
+def setup_geometry_nodes(name, group_input=False):
     """
     auxiliary function to provide boilerplate code
     should be used more frequently,
@@ -207,98 +209,6 @@ def create_spectral_class(type, r=10000):
 
     return node_tree
 
-def create_pendulum_node():
-    tree= setup_geometry_nodes("Pendulum",group_input=True)
-    links = tree.links
-    left = -16
-
-    origin = Points(tree,location=(left,4),name="Origin")
-    point = Points(tree,location=(left,0),name="PendulumMass")
-    left+=1
-
-    simulation=Simulation(tree,location=(left,0))
-    simulation.add_socket(socket_type='FLOAT',name="theta") # elongation
-    simulation.add_socket(socket_type='FLOAT',name="omega") # angular velocity
-    out = tree.nodes.get("Group Output")
-    ins = tree.nodes.get("Group Input")
-    make_new_socket(tree,name="theta",io="INPUT")
-    make_new_socket(tree, name="omega", io="INPUT")
-    make_new_socket(tree, name="b", io="INPUT")# damping to compensate accumulating errors
-    ins.location=((left-1)*200,-200)
-    links.new(ins.outputs["omega"],simulation.simulation_input.inputs["omega"])
-    links.new(ins.outputs["theta"],simulation.simulation_input.inputs["theta"])
-
-    length = InputValue(tree, location=(left - 1, -4), value=2.5)
-
-    left+=2
-    update_omega=make_function(tree,functions={
-        "omega":"o,9.81,l,/,theta,sin,*,b,o,*,+,dt,*,-"
-    },name="updateOmega",location=(left,-0.5),hide=True,
-    outputs=["omega"],inputs=["dt","theta","o","l","b"],scalars=["omega","o","l","theta","dt","b"])
-
-    links.new(length.std_out,update_omega.inputs["l"])
-    links.new(ins.outputs["b"],update_omega.inputs["b"])
-    links.new(simulation.simulation_input.outputs["theta"],update_omega.inputs["theta"])
-    links.new(simulation.simulation_input.outputs["Delta Time"],update_omega.inputs["dt"])
-    links.new(update_omega.outputs["omega"],simulation.simulation_output.inputs["omega"])
-    links.new(simulation.simulation_input.outputs["omega"],update_omega.inputs["o"])
-
-    update_theta = make_function(tree, functions={
-        "theta": "th,omega,dt,*,+"
-    }, name="updateTheta", location=(left, -1.5),hide=True,
-                                 outputs=["theta"], inputs=["dt", "th", "omega"],
-                                 scalars=["theta", "th", "dt", "omega"])
-
-    links.new(simulation.simulation_input.outputs["theta"], update_theta.inputs["th"])
-    links.new(simulation.simulation_input.outputs["Delta Time"], update_theta.inputs["dt"])
-    links.new(update_theta.outputs["theta"], simulation.simulation_output.inputs["theta"])
-    links.new(simulation.simulation_input.outputs["omega"], update_theta.inputs["omega"])
-    left+=4
-
-
-    # convert angle into position
-    converter = make_function(tree,functions={
-        "position":["theta,sin,l,*","0","theta,cos,l,-1,*,*"]
-    },name="Angle2Position",inputs=["theta","l"],outputs=["position"],scalars=["l","theta"],vectors=["position"],
-                              location=(left,-1))
-    links.new(simulation.simulation_output.outputs["theta"],converter.inputs["theta"])
-    links.new(length.std_out,converter.inputs["l"])
-    left+=1
-
-    set_pos = SetPosition(tree,position=converter.outputs["position"],location=(left,-0.5))
-    left+=1
-    join = JoinGeometry(tree,location=(left,0))
-    create_geometry_line(tree,[origin,join])
-
-    left+=1
-    point2mesh = PointsToVertices(tree,location=(left,0))
-    left+=1
-    convex_hull =ConvexHull(tree,location=(left,0))
-    left += 1
-    wireframe = WireFrame(tree, location=(left, 0))
-    left+=1
-    mat = SetMaterial(tree,location=(left,0),material='joker')
-    left+=1
-    join2 = JoinGeometry(tree,location=(left,0))
-    left+=1
-    trafo = TransformGeometry(tree,location=(left,0),translation=[5,0,1])
-    left+=1
-    create_geometry_line(tree,[point,simulation,set_pos,join,point2mesh,
-                               convex_hull,wireframe,mat,join2,trafo],out=out.inputs["Geometry"])
-
-    # create branch for the mass
-    left-=6
-    pos = Position(tree,location =(left,-1) )
-    left+=1
-    length = VectorMath(tree,location=(left,-1),operation='LENGTH',inputs0=pos.std_out)# one vertex is at the origin
-    # only the vertex away from the origin has a non-zero length, this value is used to select the correct vertex for the instance on points
-    uv = IcoSphere(tree,location=(left,-2),radius=0.3,subdivisions=3)
-    left+=1
-    iop = InstanceOnPoints(tree,location=(left,-1),selection=length.std_out,instance=uv.geometry_out)
-    left+=1
-    mat2 = SetMaterial(tree,location=(left,-2),material='plastic_example')
-    create_geometry_line(tree,[point2mesh,iop,mat2,join2])
-    return tree
 
 #########################
 ## Nuclide table (chemistry with ChemNerd44) pending

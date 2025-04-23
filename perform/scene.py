@@ -1,16 +1,21 @@
 import inspect
 import os
 import time
+from copy import deepcopy
 
 import bpy
 
+from appearance.textures import make_basic_material, make_creature_material, make_translucent_material, \
+    make_fake_glass_material, make_plastic_material, make_checker_material, make_mirror_material, make_sand_material, \
+    make_gold_material, make_silver_material, make_screen_material, make_marble_material, make_metal_materials, \
+    make_wood_material, make_scattering_material, make_silk_material, make_magnet_material, make_sign_material, \
+    make_cloud_material, make_six_color_ramp_material
 from interface import ibpy
 from perform.render import render_with_skips
 from utils.constants import DEFAULT_SCENE_BUFFER, LIGHT_TYPE, CAMERA_LOCATION, CAMERA_ANGLE, FRAME_RATE, COLORS_SCALED, \
     DEFAULT_SCENE_DURATION, SAMPLE_COUNT, LIGHT_SAMPLING_THRESHOLD, RESOLUTION_PERCENTAGE, RENDER_DIR, \
-    BLEND_FRM_RATE_DIR
+    BLEND_FRM_RATE_DIR, COLOR_NAMES, COLORS, FONT_DIR
 from utils.kwargs import get_from_kwargs
-from utils.utils import define_materials
 
 
 class Scene(object):
@@ -143,6 +148,9 @@ def initialize_blender(start,duration, short=False,resolution=[1920,1080],clear_
     area = next(area for area in bpy.context.screen.areas if area.type == 'VIEW_3D')
     space = next(space for space in area.spaces if space.type == 'VIEW_3D')
     space.shading.type = 'MATERIAL'  # set the viewport shading
+    # set view to rendered view
+    space.shading.type = 'RENDERED'  # set the viewport shading
+    space.shading.use_compositor='ALWAYS'
 
     bpy.data.scenes["Scene"].render.filepath = RENDER_DIR
 
@@ -170,9 +178,15 @@ def initialize_blender(start,duration, short=False,resolution=[1920,1080],clear_
     # will be wrong, because the gamma correction is still applied when the color
     # is defined, but setting view_transform to 'Raw' undoes the correction in
     # render.
-    scn.view_settings.view_transform = 'Raw'
+
+    # scn.view_settings.view_transform = 'Raw'
+    # scn.view_settings.gamma = 1.2
+
+    # since rubik's cube there is a different choice
+    scn.view_settings.view_transform = 'Filmic'
+    scn.view_settings.look = 'High Contrast'
+
     scn.gravity = (0, 0, -9.81)
-    scn.view_settings.gamma = 1.2
 
     bpy.ops.world.new()
     world = bpy.data.worlds[-1]
@@ -233,9 +247,52 @@ def initialize_blender(start,duration, short=False,resolution=[1920,1080],clear_
         transparent = False
     scn.render.film_transparent=transparent
 
+    # load fonts
+
+    bpy.ops.font.open(filepath=os.path.join(FONT_DIR, "Symbola/Symbola.ttf"))
+    bpy.ops.font.open(filepath=os.path.join(FONT_DIR, "arial/ARIBLK.TTF"))
+
 def get_total_duration(scenes):
     # scenes is a list of (name, object) pairs
     duration = 0
     for scene in scenes:
         duration += scene[1].duration + DEFAULT_SCENE_BUFFER
     return duration
+
+
+def define_materials():
+    if 'default' not in bpy.data.materials:
+        mat = bpy.data.materials.new(name='default')
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes['Principled BSDF'].inputs['Base Color'].default_value = (0.8, 1, 1, 1)
+
+    for i, col_name in enumerate(COLOR_NAMES):
+        name = col_name
+        col = COLORS[i]
+        make_basic_material(rgb=deepcopy(col), name=name)
+        name = 'creature_color' + str(i + 1)
+        make_creature_material(rgb=deepcopy(col), name=name)
+        name = 'glass_' + col_name
+        make_translucent_material(rgb=deepcopy(col), name=name)
+        name = 'fake_glass_' + col_name
+        make_fake_glass_material(rgb=deepcopy(col), name=name)
+        name = 'plastic_' + col_name
+        make_plastic_material(rgb=deepcopy(col), name=name)
+
+    # create checker material
+    make_checker_material()
+    make_mirror_material()
+    make_sand_material()
+    make_gold_material()
+    make_cloud_material()
+    make_silver_material()
+    make_screen_material()
+    make_marble_material()
+    make_metal_materials()
+    make_wood_material()
+    make_scattering_material()
+    make_silk_material()
+    make_magnet_material()
+    make_sign_material()
+    make_six_color_ramp_material()

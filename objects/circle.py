@@ -35,7 +35,7 @@ class Circle(Function):
         :param mode:
         :param kwargs:
         """
-        super().__init__(lambda x: [center[0] + radius * np.cos(x), center[1] + radius * np.sin(x)], coordinate_system,
+        super().__init__(lambda x: Vector([center[0] + radius * np.cos(x), center[1] + radius * np.sin(x)]), coordinate_system,
                          [0, 2.1 * np.pi], num_points=num_points, color=color, mode='PARAMETRIC', **kwargs)
 
 
@@ -66,7 +66,7 @@ class Circle2(Curve):
         self.kwargs = kwargs
 
         self.mode = self.get_from_kwargs('mode','XY')
-        domain = self.get_from_kwargs('domain',[0,2*np.pi])
+        domain = self.get_from_kwargs('domain',[0,2*np.pi*(1+1/num_points)])
 
         super().__init__(lambda x: self.parametric_function(x), domain,
                          num_points=num_points, color=color, mode='PARAMETRIC', **self.kwargs)

@@ -2,16 +2,136 @@ import mathutils
 from mathutils import Vector
 import numpy as np
 
-
+from geometry_nodes.geometry_nodes_modifier import DataModifier
 from interface import ibpy
 
 from objects.cylinder import Cylinder
 from objects.function import Function, MeshFunction
-from objects.number_line import NumberLine, DynamicNumberLine
+from objects.number_line import NumberLine, DynamicNumberLine, NumberLine2
 from objects.bobject import BObject
 from utils.constants import OBJECT_APPEARANCE_TIME, FRAME_RATE, DEFAULT_ANIMATION_TIME
 from utils.kwargs import get_from_kwargs
 from utils.utils import to_vector
+
+class CoordinateSystem2(BObject):
+    def __init__(self,**kwargs):
+        """
+            creates a coordinate system
+
+            use dim=2 for two-dimensional and dim=3 for three-dimensional coordinate systems
+            the length of the arrays should correspond to the number of dimensions
+
+            for each dimension an Numberline is created
+            in geometry nodes
+            """
+
+        self.kwargs = kwargs
+        self.data_rows =[]
+        self.origin = self.get_from_kwargs('origin', [0, 0,0])
+        self.dimension = self.get_from_kwargs('dimension', 2)
+        self.location = self.get_from_kwargs('location', Vector([0, 0, 0]))
+        self.lengths = self.get_from_kwargs('lengths', [7]*3)
+        self.radii = self.get_from_kwargs('radii', [0.05]*3)
+        self.domains = self.get_from_kwargs("domains",[[0,10]]*3)
+        self.tic_labels=self.get_from_kwargs("tic_labels",["AUTO"]*3)
+        self.n_tics=self.get_from_kwargs("n_tics",[2]*3)
+        self.tic_label_digits =self.get_from_kwargs("tic_label_digits",[False]*3)
+        self.tic_label_shifts =self.get_from_kwargs("tic_label_shifts",[Vector()]*3)
+        self.colors = self.get_from_kwargs('colors',['drawing']*3)
+        self.axes_labels = self.get_from_kwargs('axes_labels',{'x':"AUTO",'y':"AUTO",'z':"AUTO"})
+        self.include_zeros = self.get_from_kwargs('include_zeros',[True]*3)
+        self.data = self.get_from_kwargs('data',None)
+        self.name = self.get_from_kwargs('name',str(self.dimension)+"D-CoordinateSystem")
+        self.axes = []
+
+        if self.dimension ==2:
+            # compute axes locations
+            # the center of the coordinate system is the self.origin
+            if len(self.origin)==2:
+                self.origin+=[0]
+            e = [Vector([1, 0, 0]), Vector([0, 0, 1])]
+            axis_locations = [
+                 self.domains[i][0] * self.lengths[i] / (
+                            self.domains[i][1] - self.domains[i][0]) * (e[i]-to_vector(self.origin)) for i in range(2)]
+
+            names= ["xAxis","yAxis"]
+            directions = ["HORIZONTAL","VERTICAL"]
+            axis_label_keys = list(self.axes_labels.keys())
+            for i in range(2):
+                self.axes.append(NumberLine2(name=names[i],direction=directions[i],domain=self.domains[i],
+                                             location=axis_locations[i],
+                                             tic_labels=self.tic_labels[i],
+                                             n_tics = self.n_tics[i],
+                                             tic_label_digits=self.tic_label_digits[i],
+                                             tic_label_shift= self.tic_label_shifts[i],
+                                             include_zero=self.include_zeros[i],
+                                        length=self.lengths[i],
+                                 color=self.colors[i],axis_label=axis_label_keys[i],
+                                             axis_label_location=self.axes_labels[axis_label_keys[i]],**kwargs))
+        elif self.dimension ==3:
+            # compute axes locations
+            # the center of the coordinate system is the point (0,0)
+            e = [Vector([1, 0, 0]),Vector([0,1,0]), Vector([0, 0, 1])]
+            axis_locations = [
+                to_vector(self.location) + self.domains[i][0] * self.lengths[i] / (
+                            self.domains[i][1] - self.domains[i][0]) * e[i] for i in range(3)]
+
+            names = ["xAxis", "yAxis","zAxis"]
+            directions = ["HORIZONTAL", "DEEP","VERTICAL"]
+            axis_label_keys = list(self.axes_labels.keys())
+            for i in range(3):
+                self.axes.append(NumberLine2(name=names[i],direction=directions[i],domain=self.domains[i],
+                                             location=axis_locations[i],
+                                             tic_labels=self.tic_labels[i],
+                                             n_tics = self.n_tics[i],
+                                             tic_label_digits=self.tic_label_digits[i],
+                                             tic_label_shift=self.tic_label_shifts[i],
+                                             length=self.lengths[i],
+                                             include_zero=self.include_zeros[i],
+                                                color=self.colors[i],axis_label=axis_label_keys[i],
+                                             axis_label_location=self.axes_labels[axis_label_keys[i]],**kwargs))
+
+        if self.data:
+            children = self.axes+[self.data]
+        else:
+            children = self.axes
+        super().__init__(children=children,name=self.name,location=self.location,**kwargs)
+
+    def appear(self, scale=None, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME,alpha=1):
+        super().appear(scale=scale,begin_time=begin_time,transition_time=transition_time,alpha=alpha)
+        for axis in self.axes:
+            axis.grow(scale=scale,begin_time=begin_time,transition_time=transition_time,alpha=alpha)
+        return begin_time+transition_time
+
+    def zoom_x(self,from_domain=[0,1],to_domain=[0,2],begin_time=0,transition_time=DEFAULT_ANIMATION_TIME):
+        min_node=ibpy.get_geometry_node_from_modifier(self.axes[0].modifier,"Minimum")
+        max_node=ibpy.get_geometry_node_from_modifier(self.axes[0].modifier,"Maximum")
+        ibpy.change_default_value(min_node,from_value=from_domain[0],to_value=to_domain[0],begin_time=begin_time,transition_time=transition_time)
+        ibpy.change_default_value(max_node,from_value=from_domain[1],to_value=to_domain[1],begin_time=begin_time,transition_time=transition_time)
+        for row in self.data_rows:
+            row.zoom_x(from_domain=from_domain,to_domain=to_domain,begin_time=begin_time,transition_time=transition_time)
+        return begin_time+transition_time
+
+    def zoom_y(self, from_domain=[0, 1], to_domain=[0, 2], begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
+        min_node = ibpy.get_geometry_node_from_modifier(self.axes[1].modifier, "Minimum")
+        max_node = ibpy.get_geometry_node_from_modifier(self.axes[1].modifier, "Maximum")
+        ibpy.change_default_value(min_node, from_value=from_domain[0], to_value=to_domain[0], begin_time=begin_time,
+                                  transition_time=transition_time)
+        ibpy.change_default_value(max_node, from_value=from_domain[1], to_value=to_domain[1], begin_time=begin_time,
+                                  transition_time=transition_time)
+        for row in self.data_rows:
+            row.zoom_y(from_domain=from_domain, to_domain=to_domain, begin_time=begin_time,
+                     transition_time=transition_time)
+        return begin_time + transition_time
+
+    def log_x(self,begin_time=0,transition_time=DEFAULT_ANIMATION_TIME):
+        for data in self.data_rows:
+            data.to_log_x(begin_time=begin_time,transition_time=transition_time)
+        return self.axes[0].to_log(begin_time=begin_time,transition_time=transition_time)
+
+    def add_data(self,bob_data):
+        ibpy.set_parent(bob_data,self)
+        self.data_rows.append(bob_data)
 class CoordinateSystem(BObject):
     """
     creates a coordinate system
@@ -62,11 +182,11 @@ class CoordinateSystem(BObject):
         if self.dimensions == 2:
             # configure coordinate system for x- and y-axis only (y-axis pointing into z-direction)
             labels = self.get_from_kwargs('labels', ['x', 'y'])
-            directions = ['horizontal', 'vertical']
+            directions = ['HORIZONTAL', 'VERTICAL']
         else:
             # configure coordinate system for x-, y- and z-axis (z-axis pointing into z-direction)
             labels = self.get_from_kwargs('labels', ['x', 'y', 'z'])
-            directions = ['horizontal', 'deep', 'vertical']
+            directions = ['HORIZONTAL', 'DEEP', 'VERTICAL']
 
         self.domains = self.get_from_kwargs('domains', [[-1, 1], [-1, 1], [-1, 1]])
 
@@ -258,7 +378,7 @@ class CoordinateSystem(BObject):
                ):
 
         t0 = begin_time
-        super().appear(alpha=alpha,begin_time=t0, transition_time=transition_time,**kwargs)
+        super().appear(alpha=alpha,begin_time=t0, transition_time=transition_time,children=False,**kwargs) # the appearance of the children is dealt with separately
         if not empty:
             for axis in self.axes:
                 axis.appear(alpha=alpha, begin_time=t0, transition_time=transition_time,**kwargs)
@@ -400,12 +520,11 @@ class CoordinateSystem(BObject):
 
         offset = transition_time / 4 / len(self.x_lines)
         for i, line in enumerate(self.x_lines):
-            line.grow(begin_time=begin_time + i * offset, transition_time=transition_time / 2, modus='from_start')
+            line.grow(begin_time=begin_time + i * offset, transition_time=transition_time / 2)
 
         offset = transition_time / 4 / len(self.y_lines)
         for i, line in enumerate(self.y_lines):
-            line.grow(begin_time=begin_time + i * offset + transition_time / 2, transition_time=transition_time / 2,
-                      modus='from_start')
+            line.grow(begin_time=begin_time + i * offset + transition_time / 2, transition_time=transition_time / 2)
         return begin_time+transition_time
 
     def grid_next_transform(self, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):

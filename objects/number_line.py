@@ -1,13 +1,66 @@
 import numpy as np
 from mathutils import Vector
 
+from geometry_nodes.geometry_nodes_modifier import NumberLineModifier
+from interface import ibpy
 from objects.cone import Cone
+from objects.cube import Cube
 from objects.cylinder import Cylinder
 from objects.bobject import BObject
 from objects.digital_number import DigitalRange
 from objects.tex_bobject import SimpleTexBObject
 from utils.constants import OBJECT_APPEARANCE_TIME, DEFAULT_ANIMATION_TIME
 
+
+class NumberLine2(BObject):
+    def __init__(self,name='Numberline',**kwargs):
+        r"""Create a number line using geometry nodes:
+           :param name:
+               name shown in Blender
+           :type first: ``str``
+           :param \**kwargs:
+               See below
+           : Keyword Arguments:
+               * *extra* (length=1,radius=0.05,domain=[0,1],location=[0,0,0],n_tics=10,
+               label='x',
+               origin=0,
+               tic_labels='AUTO',
+               tic_label_digits=0,
+               tic_label_aligned='center',
+               tic_label_shift=[0,0,0],
+               label_unit='',
+               label_position='left',
+               label_closeness=1,
+               tip_length=0.2,
+               auto_smooth=True,
+               axis_label='x',
+               direction="HORIZONTAL|VERTICAL|DEEP|NONE"
+               )--
+           """
+
+        self.modifier = NumberLineModifier(**kwargs)
+        cube = ibpy.add_cube()
+        self.kwargs = kwargs
+        super().__init__(obj=cube, name=name, no_material=True, **kwargs)
+        super().add_mesh_modifier('NODES',node_modifier=self.modifier)
+
+    def grow(self, scale=None, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, modus='from_center', pivot=None,
+             initial_scale=0,alpha=1):
+        super().appear(alpha=alpha, begin_time=begin_time, transition_time=0, silent=True)
+        length_node = ibpy.get_geometry_node_from_modifier(self.modifier,"AxisLength")
+        radius_node = ibpy.get_geometry_node_from_modifier(self.modifier,"Radius")
+        length = self.get_from_kwargs("length",1)
+        radius = self.get_from_kwargs("radius",0.05)
+        ibpy.change_default_value(length_node,from_value=0,to_value=length,begin_time=begin_time,transition_time=transition_time)
+        ibpy.change_default_value(radius_node,from_value=0,to_value=radius,begin_time=begin_time,transition_time=transition_time)
+        label_scale = ibpy.get_geometry_node_from_modifier(self.modifier,"LabelScale")
+        ibpy.change_default_value(label_scale,from_value=0,to_value=1,begin_time=begin_time+0.9*transition_time,transition_time=0.1*transition_time)
+        return begin_time+transition_time
+
+    def to_log(self,begin_time=0,transition_time=DEFAULT_ANIMATION_TIME):
+        log_node = ibpy.get_geometry_node_from_modifier(self.modifier,"Log")
+        ibpy.change_default_value(log_node,from_value=0,to_value=1,begin_time=begin_time,transition_time=transition_time)
+        return begin_time+transition_time
 
 class NumberLine(BObject):
     """
@@ -23,7 +76,7 @@ class NumberLine(BObject):
                  label='x',
                  tic_labels='AUTO',
                  include_zero=True,
-                 direction='vertical',
+                 direction='VERTICAL',
                  origin=0,
                  label_digit=1,
                  label_unit='',
@@ -49,6 +102,7 @@ class NumberLine(BObject):
         :param kwargs:
         """
 
+        direction = direction.upper()
         self.kwargs = kwargs
         self.label_digit = label_digit
         self.dynamic = self.get_from_kwargs('dynamic',False)
@@ -61,7 +115,7 @@ class NumberLine(BObject):
         self.interval = {'min': np_min, 'max': np_max}
         # this is the positioning of the labels before the axis gets rotated
         # since labels and axis are rotated in combination into the final place
-        if direction == 'vertical':
+        if direction == 'VERTICAL':
             label_rotation = [np.pi / 2, 0, 0]
             label_aligned='right'
             if label_position=='left':
@@ -73,7 +127,7 @@ class NumberLine(BObject):
             label_offset+=Vector([-label_closeness*0.1,0,0])
             rotation_euler = self.get_from_kwargs('rotation_euler', [0, 0, 0])
             self.grow_mode = 'from_bottom'
-        elif direction == 'horizontal' or direction == 'deep':
+        elif direction == 'HORIZONTAL' or direction == 'DEEP':
             label_offset = Vector([label_closeness*0.4, 0, 0])
             label_rotation = [np.pi / 2, -np.pi / 2, 0]
             if label_position == 'left':
@@ -84,7 +138,7 @@ class NumberLine(BObject):
                 label_aligned = 'center'
             rotation_euler = self.get_from_kwargs('rotation_euler', [0, np.pi / 2, 0])
             self.grow_mode = 'from_left'
-        if direction == 'deep':
+        if direction == 'DEEP':
             self.grow_mode = 'from_front'
             rotation_euler = self.get_from_kwargs('rotation_euler', [0, np.pi / 2, np.pi / 2])
 
@@ -292,15 +346,15 @@ class NumberLine(BObject):
             label_time = 0
 
         t0 = begin_time
-        super().appear(alpha=alpha, begin_time=t0,silent=silent,**kwargs)
-        self.cyl.grow(self.cyl.intrinsic_scale, begin_time=t0, transition_time=cyl_time, modus=self.grow_mode)
+        super().appear(alpha=alpha, begin_time=t0,silent=silent,children=False,**kwargs) # apearance of children is handled in the remainder
+        self.cyl.grow(self.cyl.intrinsic_scale, transition_time=cyl_time)
         t0 += cyl_time
         self.tip.grow(self.tip.intrinsic_scale, begin_time=t0, transition_time=tip_time)
         if self.axis_label:
             self.axis_label.write(begin_time=t0, transition_time=label_time)
         t0 += tip_time
         if self.bLabels:
-            self.bLabels.appear(alpha=alpha, begin_time=t0, transition_time=tip_time)
+            self.bLabels.appear(alpha=alpha, begin_time=t0, transition_time=tip_time,children=False)
         if self.bTics:
             self.bTics.appear(alpha=alpha, begin_time=t0, transition_time=tip_time)
             for tic, label in zip(self.tics, self.labels):

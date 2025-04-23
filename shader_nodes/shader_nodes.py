@@ -22,6 +22,7 @@ class ShaderNode:
             name = kwargs.pop('name')
             self.node.label = name
             self.node.name = name
+            self.name = name
         if 'label' in kwargs:
             label = kwargs.pop('label')
             self.node.label = label
@@ -41,6 +42,11 @@ class SeparateXYZ(ShaderNode):
 
         if vector:
             tree.links.new(vector,self.node.inputs["Vector"])
+
+        self.std_out_x = self.node.outputs['X']
+        self.std_out_y = self.node.outputs['Y']
+        self.std_out_z = self.node.outputs['Z']
+
 
 class MathNode(ShaderNode):
     def __init__(self, tree, location=(0, 0), operation='ADD', input0=None, input1=None, input2=None, **kwargs):
@@ -66,6 +72,26 @@ class MathNode(ShaderNode):
             else:
                 self.tree.links.new(input2, self.node.inputs[2])
 
+class MixNode(ShaderNode):
+    def __init__(self,tree,location,type='FLOAT',factor=0,caseA=0,caseB=0,**kwargs):
+        self.node = tree.nodes.new(type="ShaderNodeMix")
+        self.std_out = self.node.outputs[0]
+        super().__init__(tree,location,**kwargs)
+
+        if isinstance(factor,(int,float)):
+            self.node.inputs['Factor'].default_value=factor
+        else:
+            self.tree.links.new(factor,self.node.inputs['Factor'])
+
+        if isinstance(caseA,(int,float)):
+            self.node.inputs['A'].default_value=caseA
+        else:
+            self.tree.links.new(caseA,self.node.inputs['A'])
+
+        if isinstance(caseB, (int, float)):
+            self.node.inputs['B'].default_value = caseB
+        else:
+            self.tree.links.new(caseB, self.node.inputs['B'])
 
 class Mapping(ShaderNode):
     def __init__(self, tree, location=(0, 0), type='POINT', vector=None,
@@ -136,6 +162,7 @@ class ImageTexture(ShaderNode):
                 self.tree.links.new(vector, self.node.inputs['Vector'])
 
         self.std_out = self.node.outputs[std_out]
+        self.alpha = self.node.outputs["Alpha"]
 
 
 class ColorRamp(ShaderNode):
@@ -151,16 +178,19 @@ class ColorRamp(ShaderNode):
         values = get_from_kwargs(kwargs,"values",[0,1])
         colors = get_from_kwargs(kwargs,"colors",[[0,0,0,1],[1,1,1,1]])
 
-        if len(values)>2:
-            self.node.color_ramp.elements.new(len(values)-2)
+        for i in range(2,len(values)):
+            self.node.color_ramp.elements.new(i)
 
         i = 0
         for value,color in zip(values,colors):
             self.node.color_ramp.elements[i].position=value
+            if len(color)==3:
+                color+=[1] # add default alpha if necessary
             self.node.color_ramp.elements[i].color=color
             i+=1
 
         self.std_out = self.node.outputs[0]
+        self.color_ramp = self.node.color_ramp
 
 
 class AttributeNode(ShaderNode):
@@ -183,6 +213,9 @@ class MixRGB(ShaderNode):
         self.node = tree.nodes.new(type="ShaderNodeMixRGB")
         super().__init__(tree, location, **kwargs)
 
+        self.factor=self.node.inputs[0]
+        self.color1 = self.node.inputs[1]
+        self.color2 = self.node.inputs[2]
         self.std_out = self.node.outputs[0]
 
         if isinstance(factor, (int, float)):
@@ -241,3 +274,31 @@ class InputValue(ShaderNode):
 
         self.std_out = self.node.outputs['Value']
         self.node.outputs['Value'].default_value = value
+
+class Displacement(ShaderNode):
+    def __init__(self, tree, location=(0, 0),
+                 height=0,
+                 midlevel=0.5,
+                 scale= 1., **kwargs):
+        self.node = tree.nodes.new(type="ShaderNodeDisplacement")
+        super().__init__(tree, location, **kwargs)
+
+        self.height=self.node.inputs[0]
+        self.midlevel = self.node.inputs[1]
+        self.scale = self.node.inputs[2]
+        self.std_out = self.node.outputs[0]
+
+        if isinstance(midlevel, (int, float)):
+            self.midlevel.default_value = midlevel
+        else:
+            self.tree.links.new(midlevel, self.midlevel)
+
+        if isinstance(scale, (int, float)):
+            self.scale.default_value = scale
+        else:
+            self.tree.links.new(scale, self.scale)
+
+        if isinstance(height, (int, float)):
+            self.height.default_value = height
+        else:
+            self.tree.links.new(height, self.height)

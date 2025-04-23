@@ -7,7 +7,7 @@ from interface import ibpy
 from interface.ibpy import add_cylinder
 from objects.geometry.geo_bobject import GeoBObject
 from utils.constants import DEFAULT_ANIMATION_TIME, FRAME_RATE
-from utils.utils import get_rotation_quaternion_from_start_and_end, to_vector
+from utils.utils import get_rotation_quaternion_from_start_and_end, to_vector, vec_round
 
 
 class Cylinder(GeoBObject):
@@ -75,6 +75,12 @@ class Cylinder(GeoBObject):
         quaternion = get_rotation_quaternion_from_start_and_end(start,end)
         return Cylinder(start=start,end=end,location=location,length=length,rotation_quaternion=quaternion,radius=radius,cyl_radii=cyl_radii,**kwargs)
 
+    def __str__(self):
+        return "BCylinder "+str(vec_round(self.start,1))+"->"+str(vec_round(self.end,1))
+
+    def __repr__(self):
+        return str(self)
+
     def grow(self, scale=None, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, modus='from_start',
              initial_scale=0):
         super().appear(begin_time=begin_time,transition_time=0)
@@ -93,6 +99,23 @@ class Cylinder(GeoBObject):
                       initial_scale=initial_scale)
         self.appeared =True
         return begin_time+transition_time
+
+    def shrink(self, scale=None, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, modus='from_start',
+             initial_scale=0):
+
+        print("Shrink " + self.ref_obj.name)
+        if not scale:
+            scale = self.ref_obj.scale.copy()
+        if modus == 'from_start' and self.start:
+            ibpy.shrink_from(self, self.start, begin_time * FRAME_RATE, transition_time * FRAME_RATE)
+        elif modus == 'from_end' and self.end:
+            ibpy.shrink_from(self, self.end, begin_time * FRAME_RATE, transition_time * FRAME_RATE)
+        elif modus == 'from_center' and self.start and self.end:
+            ibpy.shrink_from(self, 0.5 * (self.start + self.end), begin_time * FRAME_RATE, transition_time * FRAME_RATE)
+        else:
+            ibpy.shrink(self, scale, begin_time * FRAME_RATE, transition_time * FRAME_RATE, modus=modus,
+                      initial_scale=initial_scale)
+        return begin_time + transition_time
 
     def move_end_point(self, target_location=Vector(), begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
         ab = (self.end - self.start)

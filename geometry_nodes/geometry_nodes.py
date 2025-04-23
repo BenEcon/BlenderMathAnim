@@ -8,22 +8,20 @@ from functools import partial
 import bpy
 import numpy as np
 
+from appearance.textures import penrose_material, create_material_for_e8_visuals, star_color, decay_mode_material, \
+    z_gradient
 from geometry_nodes.nodes import MeshLine, Grid, InstanceOnPoints, IcoSphere, SetShadeSmooth, Position, \
     add_locations, InputValue, SetMaterial, RealizeInstances, JoinGeometry, Points, InputBoolean, InputVector, \
     PointsToVertices, ExtrudeMesh, SetPosition, WireFrame, create_geometry_line, Index, StoredNamedAttribute, \
     ConvexHull, \
-    RayCast, BooleanMath, InsideConvexHull, DeleteGeometry, NamedAttribute, VectorMath, ScaleElements, make_function, \
-    Rotation, Transpose, LinearMap, TransformGeometry, layout, CubeMesh, InsideConvexHull3D, CombineXYZ, E8Node, Matrix, \
-    ProjectionMap, DomainSize, SampleIndex, RepeatZone, MergeByDistance, MeshToPoints, Simulation, SceneTime, Switch, \
-    MathNode
+    BooleanMath, InsideConvexHull, DeleteGeometry, NamedAttribute, VectorMath, ScaleElements, make_function, \
+    Rotation, LinearMap, TransformGeometry, CubeMesh, InsideConvexHull3D, CombineXYZ, E8Node, ProjectionMap, DomainSize, \
+    SampleIndex, RepeatZone, MergeByDistance, MeshToPoints
 from interface.ibpy import Vector, create_group_from_vector_function, if_node, get_color_from_string, make_new_socket, \
     get_material, create_group_from_scalar_function
-from appearance.textures import penrose_material, create_material_for_e8_visuals, star_color, decay_mode_material, \
-    z_gradient, gradient_from_attribute
 from mathematics.groups.e8 import E8Lattice
 from mathematics.mathematica.mathematica import choose, tuples
 from physics.constants import decay_modes
-from utils.constants import FRAME_RATE
 from utils.utils import flatten
 
 
@@ -51,7 +49,7 @@ def setup_geometry_nodes(name, group_input=False):
     auxiliary function to provide boilerplate code
     should be used more frequently,
     haven't got accustomed to it yet
-    it's a little awkward, the group_output_node has to collected from the tree
+    it's a little awkward, the group_output_node has to collected from the group_tree
     for the creation of the geometry line
     out = node_tree.nodes.get("Group Output"), when this function is used
     """
@@ -180,7 +178,7 @@ def create_spectral_class(type, r=10000):
     # it is raised to some power 1.35 to damp faint stars
     conversion = make_function(tree, functions={
         "Position": "unit_x,pos,angle_projection,mul,rot,r,scale",
-        "Scale": "1,pos_x,1.15,**,1,max,/"
+        "Scale": "1,pos_x,1,**,1,max,/"
     }, name="Conversion", hide=True, location=(left, -1),
                                inputs=["r", "pos", "unit_x", "angle_projection"], outputs=["Position", "Scale"],
                                scalars=["r", "Scale"], vectors=["pos", "unit_x", "Position", "angle_projection"]
@@ -201,7 +199,7 @@ def create_spectral_class(type, r=10000):
                           position=conversion.outputs['Position'])
 
     left += 1
-    material = partial(star_color, type=type, emission=1)
+    material = partial(star_color, type=type, emission=4)
     set_mat = SetMaterial(tree, material=material, location=(left, 0))
     left += 1
     smooth = SetShadeSmooth(tree, location=(left, 0))
@@ -448,7 +446,7 @@ def create_e8():
         e8coords.append(sampleIndex)
 
     # pairing vertices with repeat zone
-    repeat = RepeatZone(node_tree, location=(left, 0), width=5)
+    repeat = RepeatZone(node_tree, location=(left, 0), node_width=5)
     repeat.add_socket(socket_type="INT", name='i')
     links.new(domain_size.outputs["Point Count"], repeat.inputs["Iterations"])
     addOne = make_function(node_tree, functions={

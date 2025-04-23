@@ -1,10 +1,9 @@
 import bmesh
 import bpy
-from mathutils import Quaternion
 
 from appearance.textures import apply_material
 from interface import ibpy
-from interface.ibpy import change_emission, Vector
+from interface.ibpy import change_emission, Vector, Quaternion
 from utils.constants import *
 from utils.utils import to_vector
 
@@ -13,21 +12,22 @@ class BObject(object):
     """
     This is the base class for all objects that can be added to a blender scene and moved
     """
-
-    def __init__(self, **kwargs):
-        """
+    def __init__(self,no_material=False, **kwargs):
+        r"""
             this class can handle the following kwargs
             |
-            | name: name of the object
-            | obj: an existing blender object (constructed in a subclass) can be connected to the base class
-            | location: position of the object in the world
-            | rotation_euler: rotation of the object
-            | rotation_quaternion: rotation of the object in terms of quaternions
-            | scale
-            | objects: blender children of this object
-            | mat
             |
-        :param kwargs:
+            |
+        :param no_material: no material is created, useful for objects created with geometry nodes or empties
+        : Keyword Arguments:
+            * name: name of the object
+            * obj: an existing blender object (constructed in a subclass) can be connected to the base class
+            * location: position of the object in the world
+            * rotation_euler: rotation of the object
+            * rotation_quaternion: rotation of the object in terms of quaternions
+            * scale
+            * objects: blender children of this object
+            * mat
         """
         # register bpy object from sub class or create default object
 
@@ -38,7 +38,7 @@ class BObject(object):
         self.updaters = []
         self.label_sep = 1
         self.name = self.get_from_kwargs('name', 'b_object')
-        self.hide = False # per default each object is visible. It can be changed with toggle_hide
+        self.hide = self.get_from_kwargs('hide',False) # per default each object is visible. It can be changed with toggle_hide
         if 'obj' in kwargs:
             ref_obj = kwargs['obj']
             if self.name != 'b_object':
@@ -86,17 +86,18 @@ class BObject(object):
 
 
         # set color
-        self.color = self.get_from_kwargs('color',None)
-        self.colors = self.get_from_kwargs('colors', None)
+        if not no_material:
+            self.color = self.get_from_kwargs('color',None)
+            self.colors = self.get_from_kwargs('colors', None)
 
 
-        if self.colors is not None:
-            apply_material(self.ref_obj, self.color, colors=self.colors, **kwargs)
-        else:
-            apply_material(self.ref_obj, self.color,**kwargs)
-        # do not automatically apply material to the children
-        # [apply_material(child,self.color,**kwargs) for child in self.b_children]
-        # for multiple slots
+            if self.colors is not None:
+                apply_material(self.ref_obj, self.color, colors=self.colors, **kwargs)
+            else:
+                apply_material(self.ref_obj, self.color,**kwargs)
+            # do not automatically apply material to the children
+            # [apply_material(child,self.color,**kwargs) for child in self.b_children]
+            # for multiple slots
 
 
         smooth = self.get_from_kwargs('smooth', 0)
@@ -275,19 +276,25 @@ class BObject(object):
 
             bobs = []
             for i, obj in enumerate(objs):
-                if i < len(cols):
+                if len(cols)==0:
+                    # no colors presented
+                    col="background"
+                elif i < len(cols):
                     col = cols[i]
                 else:
                     col = cols[-1]
                 # change made on 2023-04-13 for the laptop class
                 # obj_name = name + '_' + objects[i]
                 # converted to
+                bpy_name=obj.name
                 obj_name=name+'_'+obj.name
                 if i==0:
-                    bobs.append(BObject(obj=obj, color=col, name=obj_name,emission=emission))
+                    # added kwargs on 2024-12-08 to treat all cubies of the rubik's cube equivalently
+                    bobs.append(BObject(obj=obj, color=col, name=obj_name,emission=emission,**kwargs))
                 else:
                     bobs.append(BObject(obj=obj, color=col, name=obj_name, **kwargs))
-                IMPORTED_OBJECTS.append(obj_name)
+                #IMPORTED_OBJECTS.append(obj_name)
+                IMPORTED_OBJECTS.append(bpy_name) # 2025-02-18 to allow multiple imports of the same object
             return bobs
         else:
             obj = import_object(filename)
@@ -397,6 +404,73 @@ class BObject(object):
         :return:
         """
         ibpy.add_mesh_modifier(self, type=type, **kwargs)
+
+    def replace_mesh_modifier(self, type='SOLIDIFY', **kwargs):
+        """
+        replace modifier to mesh object
+        :param type:
+            'DATA_TRANSFER',
+            'MESH_CACHE',
+            'MESH_SEQUENCE_CACHE',
+            'NORMAL_EDIT',
+            'WEIGHTED_NORMAL',
+            'UV_PROJECT',
+            'UV_WARP',
+            'VERTEX_WEIGHT_EDIT',
+            'VERTEX_WEIGHT_MIX',
+            'VERTEX_WEIGHT_PROXIMITY',
+            'ARRAY',
+            'BEVEL',
+            'BOOLEAN',
+            'BUILD',
+            'DECIMATE',
+            'EDGE_SPLIT',
+            'NODES',
+            'MASK',
+            'MIRROR',
+            'MESH_TO_VOLUME',
+            'MULTIRES',
+            'REMESH',
+            'SCREW',
+            'SKIN',
+            'SOLIDIFY',
+            'SUBSURF',
+            'TRIANGULATE',
+            'VOLUME_TO_MESH',
+            'WELD',
+            'WIREFRAME',
+            'ARMATURE',
+            'CAST',
+            'CURVE',
+            'DISPLACE',
+            'HOOK',
+            'LAPLACIANDEFORM',
+            'LATTICE',
+            'MESH_DEFORM',
+            'SHRINKWRAP',
+            'SIMPLE_DEFORM',
+            'SMOOTH',
+            'CORRECTIVE_SMOOTH',
+            'LAPLACIANSMOOTH',
+            'SURFACE_DEFORM',
+            'WARP',
+            'WAVE',
+            'VOLUME_DISPLACE',
+            'CLOTH',
+            'COLLISION',
+            'DYNAMIC_PAINT',
+            'EXPLODE',
+            'FLUID',
+            'OCEAN',
+            'PARTICLE_INSTANCE',
+            'PARTICLE_SYSTEM',
+            'SOFT_BODY',
+            'SURFACE'
+        :param kwargs:
+        :return:
+        """
+        ibpy.replace_mesh_modifier(self, type=type, **kwargs)
+
 
     def add_constraint(self, type='COPY_LOCATION',name=None, **kwargs):
         """
@@ -530,7 +604,7 @@ class BObject(object):
         return begin_time + transition_time
 
     def appear(self,alpha=1, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME,
-               clear_data=False, silent=False,linked=False, nice_alpha=False,**kwargs):
+               clear_data=False, silent=False,linked=False, nice_alpha=False,children=True,**kwargs):
         """
         makes the object simply fade in with in the transition time
         from alpha = 0 to alpha defined in kwargs (default 1)
@@ -554,16 +628,16 @@ class BObject(object):
             obj = self.ref_obj
             if not linked:
                 if obj.name not in bpy.context.scene.objects:
-                    if self.collection is not None:
-                        # this is new, whenever an object is added to a separate collection,
-                        # all children have to be linked recursively into this collection
-                        ibpy.link(obj,collection=self.collection)
-                    else:
-                        ibpy.link(obj,collection=self.collection)
+                    ibpy.link(obj,collection=self.collection,**kwargs)
+
             if clear_data:  # this is useful for copies of objects to remove animation data from inherited from the parent
                 ibpy.clear_animation_data(self)
             ibpy.fade_in(self, begin_time * FRAME_RATE, np.maximum(1, transition_time * FRAME_RATE), alpha=alpha,**kwargs)
             self.appeared = True
+
+        if children:
+            for child in self.b_children:
+                child.appear(begin_time=begin_time,transition_time=transition_time)
         return begin_time + transition_time
 
     def change_alpha(self, alpha=1, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, **kwargs):
@@ -579,6 +653,7 @@ class BObject(object):
             transition_frames = transition_time * FRAME_RATE
 
         ibpy.change_alpha(self, begin_time*FRAME_RATE, transition_frames, alpha=alpha, **kwargs)
+        return begin_time+transition_time
 
     def toggle_hide(self,begin_time=0):
         self.hide=not self.hide
@@ -655,7 +730,7 @@ class BObject(object):
         ibpy.move(self, direction, begin_time * FRAME_RATE, transition_time * FRAME_RATE)
         return begin_time + transition_time
 
-    def move_to(self, target_location, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, global_system=False):
+    def move_to(self, target_location, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME, global_system=False,verbose=True):
         """
         move an object. !!! Make sure that the object has appeared before using this function otherwise there will be
         issues with visiblity
@@ -667,7 +742,7 @@ class BObject(object):
         """
 
         ibpy.move_to(self, target_location, begin_time * FRAME_RATE, transition_time * FRAME_RATE,
-                     global_system=global_system)
+                     global_system=global_system,verbose=verbose)
         return begin_time + transition_time
 
     def move_copy(self, direction=[0, 0, 0], begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
@@ -734,14 +809,15 @@ class BObject(object):
         ibpy.grow(self, scale, begin_time * FRAME_RATE, transition_time * FRAME_RATE, initial_scale, modus)
         return begin_time + transition_time
 
-    def shrink(self, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
+    def shrink(self,scale=0, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
         """
         shrink an object to 0
         :param begin_time: starting time
         :param transition_time: duration
         :return:
         """
-        ibpy.shrink(self, begin_time, transition_time)
+        ibpy.shrink(self, begin_frame=begin_time*FRAME_RATE, frame_duration=FRAME_RATE*transition_time,scale=0)
+        return begin_time+transition_time
 
     def next_to(self, parent, direction=RIGHT, buff=SMALL_BUFF, shift=0 * RIGHT):
         """
@@ -818,8 +894,8 @@ class BObject(object):
     def un_hide(self, begin_time=0):
         ibpy.unhide(self, begin_time=begin_time)
 
-    def change_emission(self, from_value=0, to_value=1, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
-        change_emission(self, from_value=from_value, to_value=to_value, begin_frame=begin_time * FRAME_RATE,
+    def change_emission(self, from_value=0, to_value=1, slot=0,slots=None,begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
+        ibpy.change_emission(self, from_value=from_value, to_value=to_value, slot=slot,slots=slots,begin_frame=begin_time * FRAME_RATE,
                         frame_duration=transition_time * FRAME_RATE)
         return begin_time + transition_time
 

@@ -5,20 +5,27 @@ from random import random
 
 import bpy
 import numpy as np
-from sympy import Symbol, re, im
+from sympy import Symbol, re, im, sqrt, factorial, simplify, factor
 
+from extended_math_nodes.generic_nodes import SphericalHarmonics200, SphericalHarmonicsRekursive, CMBNode
 from geometry_nodes.nodes import make_function
 from interface import ibpy
 from interface.ibpy import customize_material, make_alpha_frame, create_group_from_vector_function, \
-    Vector, set_material, get_color_from_string, create_iterator_group, get_obj, get_color, animate_sky_background
-from interface.interface_constants import TRANSMISSION, SPECULAR, EMISSION
+    Vector, set_material, create_iterator_group, get_obj, animate_sky_background
+from interface.interface_constants import TRANSMISSION, SPECULAR, EMISSION, blender_version
 from mathematics.parsing.parser import ExpressionConverter
-from mathematics.spherical_harmonics import SphericalHarmonics
+from mathematics.spherical_harmonics import SphericalHarmonics, AssociatedLegendre
 from physics.constants import temp2rgb, type2temp
 from shader_nodes.shader_nodes import TextureCoordinate, Mapping, ColorRamp, AttributeNode, HueSaturationValueNode, \
-    MathNode, MixRGB, InputValue, GradientTexture, ImageTexture, SeparateXYZ
-from utils.constants import COLORS, COLORS_SCALED, COLOR_NAMES, IMG_DIR
+    MathNode, MixRGB, InputValue, GradientTexture, ImageTexture, SeparateXYZ, Displacement
+from utils.color_conversion import rgb2hsv, hsv2rgb, get_color, get_color_from_string
+from utils.constants import COLORS, COLORS_SCALED, COLOR_NAMES, IMG_DIR, COLOR_PREFIXES
 from utils.kwargs import get_from_kwargs
+
+
+def flatten(list_of_lists):
+    list_flat = [entry for sublist in list_of_lists for entry in sublist]
+    return list_flat
 
 
 def convert_strings_to_colors(color_names):
@@ -47,7 +54,7 @@ def apply_material(obj, col, shading=None, recursive=False, type_req=None, inten
     :param intensity:
     :return:
     """
-
+    obj = get_obj(obj)
     if obj.type not in ['EMPTY', 'ARMATURE']:
         if type_req is None or obj.type == type_req:
             if col == 'vertex_color':
@@ -65,6 +72,8 @@ def apply_material(obj, col, shading=None, recursive=False, type_req=None, inten
                 material = ibpy.get_material(col, **kwargs)
             elif callable(col):
                 material = col(**kwargs)
+            else: # assuming that the color is already a material
+                material =col
 
             if shading is None:
                 obj.active_material = material
@@ -101,7 +110,8 @@ def apply_material(obj, col, shading=None, recursive=False, type_req=None, inten
     # settings for eevee
     for slot in obj.material_slots:
         slot.material.blend_method = 'HASHED'
-        slot.material.shadow_method = 'HASHED'
+        if blender_version()<(4,3):
+            slot.material.shadow_method = 'HASHED'
 
     if 'uv_alpha_frame' in kwargs:
         uv_alpha_frame = kwargs.pop('uv_alpha_frame')
@@ -253,6 +263,10 @@ def shade_material(material, shading):
         color[0] *= down
         color[1] *= down
         color[2] *= down
+    elif shading == 'darker2':
+        color[0] *= down**2
+        color[1] *= down**2
+        color[2] *= down**2
 
     for i in range(3):
         color[i] = np.minimum(1, color[i])
@@ -410,27 +424,27 @@ def gradient_from_attribute(name="AngleDisplacement", **kwargs):
     customize_material(mat, **kwargs)
     bsdf = nodes.get("Principled BSDF")
 
-    attr_name = get_from_kwargs(kwargs,"attr_name","attributeName")
-    attr_type = get_from_kwargs(kwargs,"attr_type","GEOMETRY")
-    gradient = get_from_kwargs(kwargs,"gradient",{0:[1,0,0,1],0.5:[0,1,0,1],1:[0,0,1,1]})
-    function = get_from_kwargs(kwargs,"function","fac,2,pi,*,/,0.5,+")
+    attr_name = get_from_kwargs(kwargs, "attr_name", "attributeName")
+    attr_type = get_from_kwargs(kwargs, "attr_type", "GEOMETRY")
+    gradient = get_from_kwargs(kwargs, "gradient", {0: [1, 0, 0, 1], 0.5: [0, 1, 0, 1], 1: [0, 0, 1, 1]})
+    function = get_from_kwargs(kwargs, "function", "fac,2,pi,*,/,0.5,+")
 
     attr = AttributeNode(tree, location=(-4, 0),
-                         attribute_name=attr_name,type=attr_type)
+                         attribute_name=attr_name, type=attr_type)
     trafo = make_function(tree, functions={
         "factor": function
-    }, location=(-3, 0), name=attr_name+"_transform",
-                     node_group_type='Shader',
+    }, location=(-3, 0), name=attr_name + "_transform",
+                          node_group_type='Shader',
                           inputs=["fac"], outputs=["factor"], scalars=["fac", "factor"])
-    ramp = ColorRamp(tree, location=(-2, 0),factor=trafo.outputs["factor"],hide=False)
-    links.new(attr.fac_out,trafo.inputs["fac"])
-    ramp.node.color_ramp.elements.new(len(gradient)-2)
+    ramp = ColorRamp(tree, location=(-2, 0), factor=trafo.outputs["factor"], hide=False)
+    links.new(attr.fac_out, trafo.inputs["fac"])
+    ramp.node.color_ramp.elements.new(len(gradient) - 2)
 
-    i=0
-    for key,val in gradient.items():
+    i = 0
+    for key, val in gradient.items():
         ramp.node.color_ramp.elements[i].position = key
         ramp.node.color_ramp.elements[i].color = val
-        i=i+1
+        i = i + 1
 
     links.new(ramp.std_out, bsdf.inputs["Base Color"])
     links.new(ramp.std_out, bsdf.inputs[EMISSION])
@@ -439,13 +453,13 @@ def gradient_from_attribute(name="AngleDisplacement", **kwargs):
         dict = kwargs.pop("alpha_function")
 
         key = str(next(iter(dict)))
-        attr2 = AttributeNode(tree, location=(-2,2), attribute_name=key,std_out='Fac')
-        trafo = make_function(tree,functions={
-            "alpha":dict[key]
-        },node_group_type="Shader",inputs=["alpha"],outputs=["alpha"],scalars=["alpha"],location=(-2,1))
+        attr2 = AttributeNode(tree, location=(-2, 2), attribute_name=key, std_out='Fac')
+        trafo = make_function(tree, functions={
+            "alpha": dict[key]
+        }, node_group_type="Shader", inputs=["alpha"], outputs=["alpha"], scalars=["alpha"], location=(-2, 1))
 
-        links.new(attr2.fac_out,trafo.inputs["alpha"])
-        links.new(trafo.outputs["alpha"],bsdf.inputs["Alpha"])
+        links.new(attr2.fac_out, trafo.inputs["alpha"])
+        links.new(trafo.outputs["alpha"], bsdf.inputs["Alpha"])
     return mat
 
 
@@ -471,6 +485,40 @@ def z_gradient(name="zGradient", **kwargs):
     coords = TextureCoordinate(tree, location=(-4, 0), std_out='Generated')
     sep_xyz = SeparateXYZ(tree, location=(-3, 0), vector=coords.std_out)
     ramp = ColorRamp(tree, location=(-1, 0), factor=sep_xyz.node.outputs['Z'])
+    ramp.node.color_ramp.elements.new(1)
+    ramp.node.color_ramp.elements[0].position = 0.00
+    ramp.node.color_ramp.elements[0].color = [0, 0, 1, 1]
+    ramp.node.color_ramp.elements[1].position = 0.555
+    ramp.node.color_ramp.elements[1].color = [0, 1, 0, 1]
+    ramp.node.color_ramp.elements[2].position = 1
+    ramp.node.color_ramp.elements[2].color = [1, 0, 0, 1]
+    links.new(ramp.std_out, bsdf.inputs["Base Color"])
+    links.new(ramp.std_out, bsdf.inputs[EMISSION])
+    return mat
+
+
+def x_gradient(name="xGradient", **kwargs):
+    """
+    create a color gradient
+    just a quick simple implementation, lots of customization is possible
+    :param name:
+    :param kwargs:
+    :return:
+    """
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+
+    mat.name = name
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    customize_material(mat, **kwargs)
+    bsdf = nodes.get("Principled BSDF")
+
+    coords = TextureCoordinate(tree, location=(-4, 0), std_out='Generated')
+    sep_xyz = SeparateXYZ(tree, location=(-3, 0), vector=coords.std_out)
+    ramp = ColorRamp(tree, location=(-1, 0), factor=sep_xyz.node.outputs['X'])
     ramp.node.color_ramp.elements.new(1)
     ramp.node.color_ramp.elements[0].position = 0.00
     ramp.node.color_ramp.elements[0].color = [0, 0, 1, 1]
@@ -517,7 +565,6 @@ def camera_gradient_rainbow(name="Rainbow", **kwargs):
     links.new(ramp.std_out, bsdf.inputs["Base Color"])
     links.new(ramp.std_out, bsdf.inputs[EMISSION])
     return mat
-
 
 def image_over_text(name="ImageOverText", **kwargs):
     """
@@ -706,6 +753,72 @@ def multipole_texture(l_max=5, **kwargs):
     return mat
 
 
+def double_gradient(functions={"uv":["uv_x","uv_y","0"],"abs_uv":["uv_x,abs","uv_y,abs","uv_z,abs"]},name="DoubleGradient",direction='x', **kwargs):
+    """
+       this texture creates a coordinate-dependent gradient that is different for positive and negative values
+       @type direction: str
+
+
+       """
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+
+    left = -10
+
+    coords = TextureCoordinate(tree, location=(left, 0),std_out="Generated")
+    left += 1
+    trafo= make_function(nodes, functions=functions,
+                          inputs=["uv"], vectors=["uv","abs_uv"],
+                          outputs=["uv","abs_uv"],
+                          node_group_type='ShaderNodes',
+                          location=(left, -1),name="Trafo")
+    links.new(coords.std_out, trafo.inputs["uv"])
+
+    left += 1
+
+    # positive branch
+    sep = SeparateXYZ(tree,location=(left,0),vector=trafo.outputs["uv"])
+    abs_sep = SeparateXYZ(tree,location=(left,-0.5),vector=trafo.outputs["abs_uv"])
+
+    left+=1
+    if direction=='x':
+        factor=sep.std_out_x
+        abs_factor = abs_sep.std_out_x
+    elif direction=='y':
+        factor=sep.std_out_y
+        abs_factor = abs_sep.std_out_y
+    else:
+        factor=sep.std_out_z
+        abs_factor = abs_sep.std_out_z
+    # color ramp for the nice color gradient
+    ramp_pos = ColorRamp(tree, location=(left, 1), factor=abs_factor,
+                         values=[0, 0.5, 1], colors=[[0, 1, 0, 1], [1, 1, 0, 1], [1, 0, 0, 1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_factor,
+                         values=[0, 0.5, 1],
+                         colors=[[0, 1, 0, 1], [0, 0, 1, 1], [1, 0, 1, 1]], hide=False)
+
+    left += 2
+    sign = MathNode(tree,location=(left,0),operation='SIGN',input0 = factor,input1=0)
+
+    left+=1
+    mix = MixRGB(tree, location=(left, 0), factor=sign.std_out,
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    customize_material(mat, **kwargs)
+
+    return mat
+
 def dipole_texture(**kwargs):
     mat = bpy.data.materials.new(name="DipoleTexture" + str(type))
     mat.use_nodes = True
@@ -714,6 +827,7 @@ def dipole_texture(**kwargs):
     tree = mat.node_tree
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
 
     y11 = SphericalHarmonics(1, 1, "theta", "phi")
     y10 = SphericalHarmonics(1, 0, "theta", "phi")
@@ -742,9 +856,9 @@ def dipole_texture(**kwargs):
                           location=(left, -1))
     links.new(coords.std_out, polar.inputs["uv"])
 
-    a = InputValue(tree, location=(left, 1.5), value=1)
-    alpha = InputValue(tree, location=(left, 1), value=-1)
-    b = InputValue(tree, location=(left, 0.5), value=-1)
+    a = InputValue(tree, location=(left, 1.5), value=get_from_kwargs(kwargs,"x",0),name="xValue")
+    alpha = InputValue(tree, location=(left, 1), value=get_from_kwargs(kwargs,"y",0),name="yValue")
+    b = InputValue(tree, location=(left, 0.5), value=get_from_kwargs(kwargs,"z",0), name="zValue")
     left += 1
 
     in_sockets = [a.std_out, alpha.std_out, b.std_out, polar.outputs["theta"], polar.outputs["phi"]]
@@ -779,7 +893,7 @@ def dipole_texture(**kwargs):
                          values=[0, 0.5, 1],
                          colors=[[0, 1, 0, 1], [0, 0, 1, 1], [1, 0, 1, 1]], hide=False)
 
-    left += 1
+    left += 2
 
     mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
                  color1=ramp_pos.std_out, color2=ramp_neg.std_out)
@@ -788,9 +902,520 @@ def dipole_texture(**kwargs):
     links.new(mix.std_out, bsdf.inputs['Base Color'])
     links.new(mix.std_out, bsdf.inputs[EMISSION])
 
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    displace = Displacement(tree,location=(left,-2),height=abs_temp.outputs["abs"],scale=scale.std_out)
+    mat.displacement_method="DISPLACEMENT"
+
+    links.new(displace.std_out,material_out.inputs["Displacement"])
     customize_material(mat, **kwargs)
     return mat
 
+def multipole_texture(l=6,**kwargs):
+    mat = bpy.data.materials.new(name="MultipolePoleTexture_l=" + str(l))
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+
+    harmonics = [SphericalHarmonics(l,m,"theta","phi") for m in range(l+1)]
+    symbols = [Symbol("a"+str(idx), real=True) for idx in range(0,2*l+1)]
+
+    multipole = symbols[0]*harmonics[0].poly
+
+    for i in range(l):
+        multipole = multipole+(symbols[2*i+1]+symbols[2*i+2]*1j)*harmonics[i+1].poly
+
+    multipole=multipole.expand(func=True)
+    print(re(multipole))
+    print(im(multipole))
+
+    left = -7
+    coords = TextureCoordinate(tree, location=(left, 0))
+    left += 1
+    polar = make_function(nodes, functions={
+        "theta": "uv_y,pi,*",
+        "phi": "uv_x,pi,*,2,*"
+    },
+                          inputs=["uv"], vectors=["uv"],
+                          outputs=["theta", "phi"],
+                          scalars=["theta", "phi"],
+                          node_group_type='ShaderNodes',
+                          location=(left, -1),
+                          name="PolarCoordinates")
+    links.new(coords.std_out, polar.inputs["uv"])
+
+    inputValues = [InputValue(tree,location=(left,0+0.25*i),name="a"+str(i)) for i  in range(2*l+1)]
+    left += 1
+
+    in_sockets = [inputValue.std_out for inputValue in inputValues]+[ polar.outputs["theta"], polar.outputs["phi"]]
+    expr = ExpressionConverter(str(re(multipole))+str(im(multipole))).postfix()
+    ins = ["a"+str(i) for i in range(2*l+1)]+["theta", "phi"]
+    outs = ["temp"]
+    temperature = make_function(nodes, functions={
+        "temp": expr
+    }, inputs=ins, outputs=outs, scalars=ins + outs,
+                                node_group_type='ShaderNodes', location=(left, 0))
+
+    for socket, label in zip(in_sockets, ins):
+        links.new(socket, temperature.inputs[label])
+    left += 1
+
+    abs_temp = make_function(nodes, functions={
+        "abs": "temp,abs",
+        "positive": "temp,0,>"
+    }, inputs=["temp"], outputs=["abs", "positive"], scalars=["temp", "abs", "positive"],
+                             location=(left, 0), node_group_type='ShaderNodes')
+    links.new(temperature.outputs["temp"], abs_temp.inputs["temp"])
+    left += 1
+
+    # positive branch
+
+    # color ramp for the nice color gradient
+    ramp_pos = ColorRamp(tree, location=(left, 1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1], colors=[[0, 1, 0, 1], [1, 1, 0, 1], [1, 0, 0, 1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[[0, 1, 0, 1], [0, 0, 1, 1], [1, 0, 1, 1]], hide=False)
+
+    left += 2
+
+    mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    displace = Displacement(tree,location=(left,-2),height=abs_temp.outputs["abs"],scale=scale.std_out)
+    mat.displacement_method="DISPLACEMENT"
+
+    links.new(displace.std_out,material_out.inputs["Displacement"])
+    customize_material(mat, **kwargs)
+    return mat
+
+def multipole_texture_optimized(ms=[0,1,2],ns=[0,1,2],**kwargs):
+    mat = bpy.data.materials.new(name="MultipolePoleTexture_l=" + str(200))
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+
+
+    left = -10
+    coords = TextureCoordinate(tree, location=(left, 0))
+    left += 1
+    polar = make_function(nodes, functions={
+        "theta": "uv_y,pi,*",
+        "phi": "uv_x,pi,*,2,*"
+    },
+                          inputs=["uv"], vectors=["uv"],
+                          outputs=["theta", "phi"],
+                          scalars=["theta", "phi"],
+                          node_group_type='ShaderNodes',
+                          location=(left, -1),
+                          name="PolarCoordinates")
+    links.new(coords.std_out, polar.inputs["uv"])
+    left+=1
+
+    temperature = SphericalHarmonics200(tree, ms=ms, ns=ns, location=(left, 0),hide=True)
+
+    tree.links.new(polar.outputs["theta"],temperature.theta)
+    tree.links.new(polar.outputs["phi"],temperature.phi)
+
+    inputValues = [InputValue(tree, location=(left-1, 0 + 0.25 * m/10), name="a_" + str(m)) for m in ms]
+    inputValues2 = [InputValue(tree, location=(left-2, 0 + 0.25 * n/10), name="b_" + str(n)) for n in ns]
+    left += 1
+
+    for m,input in zip(ms,inputValues):
+        links.new(input.std_out, temperature.inputs["a_"+str(m)])
+        left += 1
+
+    for n,input in zip(ns,inputValues2):
+        links.new(input.std_out, temperature.inputs["b_"+str(n)])
+        left += 1
+
+    abs_temp = make_function(nodes, functions={
+        "abs": "temp,abs",
+        "positive": "temp,0,>"
+    }, inputs=["temp"], outputs=["abs", "positive"], scalars=["temp", "abs", "positive"],
+                             location=(left, 0), node_group_type='ShaderNodes')
+    links.new(temperature.outputs["Y"], abs_temp.inputs["temp"])
+    left += 1
+
+    # positive branch
+
+    # color ramp for the nice color gradient
+    ramp_pos = ColorRamp(tree, location=(left, 2), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1], colors=[[0, 1, 0, 1], [1, 1, 0, 1], [1, 0, 0, 1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[[0, 1, 0, 1], [0, 0, 1, 1], [1, 0, 1, 1]], hide=False)
+
+    left += 2
+
+    mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    displace = Displacement(tree,location=(left,-2),height=abs_temp.outputs["abs"],scale=scale.std_out)
+    mat.displacement_method="DISPLACEMENT"
+
+    links.new(displace.std_out,material_out.inputs["Displacement"])
+    customize_material(mat, **kwargs)
+    return mat
+
+def cmb_texture(ls = [2,3,5], powerspectrum=None,displacement=True, **kwargs):
+    mat = bpy.data.materials.new(name="CMBTexture_l")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+
+
+    left = -10
+    coords = TextureCoordinate(tree, location=(left, 0))
+    left += 1
+    polar = make_function(nodes, functions={
+        "theta": "uv_y,pi,*",
+        "phi": "uv_x,pi,*,2,*"
+    },
+                          inputs=["uv"], vectors=["uv"],
+                          outputs=["theta", "phi"],
+                          scalars=["theta", "phi"],
+                          node_group_type='ShaderNodes',
+                          location=(left, -1),
+                          name="PolarCoordinates")
+    links.new(coords.std_out, polar.inputs["uv"])
+    left+=1
+
+    if powerspectrum is None:
+        # artificial power_spectrum
+        powerspectrum = [1] * len(ls)
+
+    # prepare the amplitudes
+    # the scaling of the amplitude is motivated as follows
+    # We get the Dell from the spectrum
+    # The Cell are related to the Dell by 1/l/(l+1)
+    # the amplitude is the square root of the Cell
+    # since we only plot one m instead of (2l+1) possible ones, we increase the power again by (2*l+1)
+    amplitudes = [np.sqrt(p/l/(l+1)*(2*l+1)) for (p, l) in zip(powerspectrum, ls)]
+    coefficients = []
+    for i,ampl in enumerate(amplitudes):
+        coefficients.append(InputValue(tree,location=(left,0.25*i),value=ampl,name="a"+str(i)))
+    left+=1
+
+    temperature = CMBNode(tree,ls=ls,powerspectrum=powerspectrum, location=(left, 0),hide=True,**kwargs)
+
+    tree.links.new(polar.outputs["theta"],temperature.theta)
+    tree.links.new(polar.outputs["phi"],temperature.phi)
+    for i in range(len(amplitudes)):
+        tree.links.new(coefficients[i].std_out,temperature.inputs["a"+str(i)])
+
+    scale = InputValue(tree, location=(left, 1.5), value=0.04)
+    left+=1
+
+    abs_temp = make_function(nodes,name="Extractor", functions={
+        "abs": "temp,abs,s,*",
+        "positive": "temp,0,>"
+    }, inputs=["temp","s"], outputs=["abs", "positive"], scalars=["s","temp", "abs", "positive"],
+                             location=(left, 0), node_group_type='ShaderNodes')
+    links.new(temperature.outputs["Y"], abs_temp.inputs["temp"])
+    links.new(scale.std_out,abs_temp.inputs["s"])
+
+    left += 1
+
+    # positive branch
+    # color ramp for the nice color gradient
+    ramp_pos = ColorRamp(tree, location=(left, 2), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1], colors=[[1,0.9,0.8, 1], [0.1,0.7,0.8, 1], [0,0,0.9, 1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[[1,0.9,0.8, 1], [1,0.77,0.28, 1], [0.75,0,0, 1]], hide=False)
+
+    left += 2
+
+    mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    left += 1
+    displace_function = make_function(tree,name="Color2Displacement",
+                functions={
+                    "height":"v_x,v_z,-"
+
+                },inputs=["v"],outputs=["height"],node_group_type='Shader',
+                scalars=["height"],vectors=["v"])
+    links.new(mix.std_out,displace_function.inputs["v"])
+
+    left+=1
+    displace = Displacement(tree,location=(left,-2),height=displace_function.outputs["height"],midlevel=0,scale=0.025)
+    mat.displacement_method="DISPLACEMENT"
+    if displacement:
+        links.new(displace.std_out,material_out.inputs["Displacement"])
+    customize_material(mat, **kwargs)
+    return mat
+
+def cmb_infrared(src, **kwargs):
+    mat = bpy.data.materials.new(name="CMBInfrared")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+    bsdf = nodes['Principled BSDF']
+
+    left = -10
+
+    coords = TextureCoordinate(tree,location=(left,0),std_out="Generated")
+    left+=1
+    img = ImageTexture(tree,location=(left,0),
+                       image=bpy.data.images.load(os.path.join(IMG_DIR,src)),
+                    vector=coords.std_out)
+    left+=1
+    links.new(img.alpha,bsdf.inputs["Alpha"])
+
+    conversion = make_function(nodes,location=(left,0),functions={
+        "fac":"1,col_x,col_y,-,-"
+    },
+                               node_group_type="Shader",
+                               inputs=["col"],outputs=["fac"],
+                               vectors=["col"],
+                               scalars=["fac"],name="ColorConversion")
+
+    links.new(img.std_out,conversion.inputs["col"])
+    left +=1
+
+    ramp = ColorRamp(tree,location=(left,0),
+                     factor=conversion.outputs["fac"],
+                     values=[0,0.447,0.532,0.640,0.924],
+                     colors=[[0.0, 0.0, 1.0],
+                             [0.0, 0.6549019607843137, 1.0],
+                             [1.0, 0.9215686274509803, 0.8274509803921568],[1.0, 0.49019607843137253, 0.0],[0.39215686274509803, 0.0, 0.0]],
+    )
+    links.new(ramp.std_out,bsdf.inputs["Base Color"])
+    links.new(ramp.std_out,bsdf.inputs[EMISSION])
+
+
+
+    customize_material(mat, **kwargs)
+    return mat
+
+def cmb_logo_texture(circle_group="Red",ls = [2,3,5],color='drawing', powerspectrum=None,displacement=True, **kwargs):
+    mat = bpy.data.materials.new(name="CMBTexture_"+color)
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+
+    left = -10
+    theta_attr = AttributeNode(tree,attribute_name="Theta"+circle_group,location=(left,0))
+    phi_attr = AttributeNode(tree,attribute_name="Phi"+circle_group,location=(left,-1))
+    left+=1
+
+    if powerspectrum is None:
+        # artificial power_spectrum
+        powerspectrum = [1] * len(ls)
+
+    # prepare the amplitudes
+    # the scaling of the amplitude is motivated as follows
+    # We get the Dell from the spectrum
+    # The Cell are related to the Dell by 1/l/(l+1)
+    # the amplitude is the square root of the Cell
+    # since we only plot one m instead of (2l+1) possible ones, we increase the power again by (2*l+1)
+    amplitudes = [np.sqrt(p/l/(l+1)*(2*l+1)) for (p, l) in zip(powerspectrum, ls)]
+    coefficients = []
+    for i,ampl in enumerate(amplitudes):
+        coefficients.append(InputValue(tree,location=(left,0.25*i),value=ampl,name="a"+str(i)))
+    left+=1
+
+    temperature = CMBNode(tree,ls=ls,powerspectrum=powerspectrum, location=(left, 0),hide=True,**kwargs)
+
+    tree.links.new(theta_attr.std_out,temperature.theta)
+    tree.links.new(phi_attr.std_out,temperature.phi)
+    for i in range(len(amplitudes)):
+        tree.links.new(coefficients[i].std_out,temperature.inputs["a"+str(i)])
+
+    scale = InputValue(tree, location=(left, 1.5), value=0.04)
+    left+=1
+
+    abs_temp = make_function(nodes,name="Extractor", functions={
+        "abs": "temp,abs,s,*",
+        "positive": "temp,0,>"
+    }, inputs=["temp","s"], outputs=["abs", "positive"], scalars=["s","temp", "abs", "positive"],
+                             location=(left, 0), node_group_type='ShaderNodes')
+    links.new(temperature.outputs["Y"], abs_temp.inputs["temp"])
+    links.new(scale.std_out,abs_temp.inputs["s"])
+
+    left += 1
+
+    # positive branch
+    # color ramp for the nice color gradient
+    rgb = ibpy.get_color_from_string(color)
+    hsv = rgb2hsv(*rgb[0:3])
+
+    hue =hsv[0]
+    max = list(hsv2rgb(hue, 1, 1))
+    maxhalf = list(hsv2rgb(hue, 0.75, 1))
+    zero = list(hsv2rgb(hue, 0.5, 1))
+    minhalf = list(hsv2rgb(hue, 0.75, 0.75))
+    min = list(hsv2rgb(hue, 1, 0.5))
+    ramp_pos = ColorRamp(tree, location=(left, 2), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[zero+[1], maxhalf+[1], max+[1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[zero+[1], minhalf+[1], min+[1]], hide=False)
+
+    left += 2
+
+    mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    left += 1
+    displace_function = make_function(tree,name="Color2Displacement",
+                functions={
+                    "height":"v_x,v_z,-"
+
+                },inputs=["v"],outputs=["height"],node_group_type='Shader',
+                scalars=["height"],vectors=["v"])
+    links.new(mix.std_out,displace_function.inputs["v"])
+
+    left+=1
+    displace = Displacement(tree,location=(left,-2),height=displace_function.outputs["height"],midlevel=0,scale=0.025)
+    mat.displacement_method="DISPLACEMENT"
+    if displacement:
+        links.new(displace.std_out,material_out.inputs["Displacement"])
+    customize_material(mat, **kwargs)
+    return mat
+
+def multipole_range_texture(l_min=2,l_max=6,**kwargs):
+
+    mat = bpy.data.materials.new(name="MultipolePoleTexture_l_between_" + str(l_min)+"_and_"+str(l_max))
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    material_out=nodes.get("Material Output")
+
+    harmonics_list = [[SphericalHarmonics(l,m,"theta","phi") for m in range(l+1)] for l in range(l_min,l_max+1)]
+    symbols_list = [[Symbol("a"+str(l)+"m"+str(idx), real=True) for idx in range(0,2*l+1)] for l in range(l_min,l_max+1)]
+
+    multipole=0
+    l = l_min
+    for harmonics,symbols in zip(harmonics_list,symbols_list):
+        multipole = multipole+symbols[0]*harmonics[0].poly
+        for i in range(l):
+            multipole = multipole+(symbols[2*i+1]+symbols[2*i+2]*1j)*harmonics[i+1].poly
+        l+=1
+
+    multipole=multipole.expand(func=True)
+    print(re(multipole))
+    print(im(multipole))
+
+    left = -7
+    coords = TextureCoordinate(tree, location=(left, 0))
+    left += 1
+    polar = make_function(nodes, functions={
+        "theta": "uv_y,pi,*",
+        "phi": "uv_x,pi,*,2,*"
+    },
+                          inputs=["uv"], vectors=["uv"],
+                          outputs=["theta", "phi"],
+                          scalars=["theta", "phi"],
+                          node_group_type='ShaderNodes',
+                          location=(left, -1),
+                          name="PolarCoordinates")
+    links.new(coords.std_out, polar.inputs["uv"])
+
+    inputValues = flatten([[InputValue(tree,location=(left+l,0+0.25*i),name="a"+str(l)+"m"+str(i)) for i  in range(2*l+1)] for l in range(l_min,l_max+1)])
+    left += 1+(l_max-l_min)
+
+    in_sockets = [inputValue.std_out for inputValue in inputValues]+[ polar.outputs["theta"], polar.outputs["phi"]]
+    expr = ExpressionConverter(str(re(multipole))+str(im(multipole))).postfix()
+    ins = flatten([["a"+str(l)+"m"+str(i) for i in range(2*l+1)] for l in range(l_min,l_max+1)])+["theta", "phi"]
+    outs = ["temp"]
+    temperature = make_function(nodes, functions={
+        "temp": expr
+    }, inputs=ins, outputs=outs, scalars=ins + outs,
+                                node_group_type='ShaderNodes', location=(left, 0))
+
+    for socket, label in zip(in_sockets, ins):
+        links.new(socket, temperature.inputs[label])
+    left += 1
+
+    abs_temp = make_function(nodes, functions={
+        "abs": "temp,abs",
+        "positive": "temp,0,>"
+    }, inputs=["temp"], outputs=["abs", "positive"], scalars=["temp", "abs", "positive"],
+                             location=(left, 0), node_group_type='ShaderNodes')
+    links.new(temperature.outputs["temp"], abs_temp.inputs["temp"])
+    left += 1
+
+    # positive branch
+
+    # color ramp for the nice color gradient
+    ramp_pos = ColorRamp(tree, location=(left, 1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1], colors=[[0, 1, 0, 1], [1, 1, 0, 1], [1, 0, 0, 1]], hide=False)
+
+    # negative branch
+    ramp_neg = ColorRamp(tree, location=(left, -1), factor=abs_temp.outputs["abs"],
+                         values=[0, 0.5, 1],
+                         colors=[[0, 1, 0, 1], [0, 0, 1, 1], [1, 0, 1, 1]], hide=False)
+
+    left += 2
+
+    mix = MixRGB(tree, location=(left, 0), factor=abs_temp.outputs["positive"],
+                 color1=ramp_pos.std_out, color2=ramp_neg.std_out)
+
+    bsdf = nodes.get('Principled BSDF')
+    links.new(mix.std_out, bsdf.inputs['Base Color'])
+    links.new(mix.std_out, bsdf.inputs[EMISSION])
+
+    # introduce displacement
+    scale=InputValue(tree,location=(left-1,-2),name="DisplacementScale",value=0)
+
+    displace = Displacement(tree,location=(left,-2),height=abs_temp.outputs["abs"],scale=scale.std_out)
+    mat.displacement_method="DISPLACEMENT"
+
+    links.new(displace.std_out,material_out.inputs["Displacement"])
+    customize_material(mat, **kwargs)
+    return mat
 
 def rgb_color(rgb=[1, 1, 1, 1], **kwargs):
     if rgb is None:
@@ -806,7 +1431,6 @@ def rgb_color(rgb=[1, 1, 1, 1], **kwargs):
     bsdf.inputs['Base Color'].default_value = color
     bsdf.inputs[EMISSION].default_value = color
     return mat
-
 
 def decay_mode_material(**kwargs):
     mat = bpy.data.materials.new(name="DecayModeColor" + str(type))
@@ -846,6 +1470,28 @@ def decay_mode_material(**kwargs):
     customize_material(mat, **kwargs)
     return mat
 
+def glow_at_appearance(**kwargs):
+    mat = bpy.data.materials.new(name="GlowAtAppearance")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    bsdf = nodes['Principled BSDF']
+
+    left = -10
+
+    color = get_from_kwargs(kwargs,"color","drawing")
+    rgb = get_color(color)
+
+    bsdf.inputs["Base Color"].default_value=rgb
+    bsdf.inputs[EMISSION].default_value=rgb
+
+    attr = AttributeNode(tree,attribute_name="Glow",type="INSTANCER")
+    links.new(attr.fac_out,bsdf.inputs["Emission Strength"])
+
+    customize_material(mat, **kwargs)
+    return mat
 
 def star_color(temp=None, type=None, **kwargs):
     mat = bpy.data.materials.new(name="StarColor" + str(type))
@@ -867,7 +1513,6 @@ def star_color(temp=None, type=None, **kwargs):
     bsdf.inputs['Emission Strength'].default_value = emission
 
     return mat
-
 
 def eight_dimensional_color(u_dim=0, v_dim=1, **kwargs):
     mat = bpy.data.materials.new(name="material_for_e8")
@@ -913,7 +1558,6 @@ def eight_dimensional_color(u_dim=0, v_dim=1, **kwargs):
     customize_material(mat, **kwargs)
     return mat
 
-
 def phase2hue_material(attribute_names=None, **kwargs):
     mat = bpy.data.materials.new(name="Phase2HueMaterial")
     mat.use_nodes = True
@@ -939,15 +1583,14 @@ def phase2hue_material(attribute_names=None, **kwargs):
         dict = kwargs.pop("alpha_function")
 
         key = str(next(iter(dict)))
-        attr2 = AttributeNode(tree, location=(-2,2), attribute_name=key,std_out='Fac')
-        trafo = make_function(tree,functions={
-            "alpha":dict[key]
-        },node_group_type="Shader",inputs=["alpha"],outputs=["alpha"],scalars=["alpha"],location=(-2,1))
+        attr2 = AttributeNode(tree, location=(-2, 2), attribute_name=key, std_out='Fac')
+        trafo = make_function(tree, functions={
+            "alpha": dict[key]
+        }, node_group_type="Shader", inputs=["alpha"], outputs=["alpha"], scalars=["alpha"], location=(-2, 1))
 
-        links.new(attr2.fac_out,trafo.inputs["alpha"])
-        links.new(trafo.outputs["alpha"],bsdf.inputs["Alpha"])
+        links.new(attr2.fac_out, trafo.inputs["alpha"])
+        links.new(trafo.outputs["alpha"], bsdf.inputs["Alpha"])
     return mat
-
 
 def create_material_for_e8_visuals(attribute_names=None, **kwargs):
     """
@@ -981,7 +1624,7 @@ def create_material_for_e8_visuals(attribute_names=None, **kwargs):
         mixer_sockets.append(mix.inputs[0])
         last_mixer = mix
 
-    #create attribute node and pipe the result
+    # create attribute node and pipe the result
     for i, name in enumerate(attribute_names):
         attr = nodes.new(type='ShaderNodeAttribute')
         attr.attribute_type = "INSTANCER"
@@ -1003,7 +1646,6 @@ def create_material_for_e8_visuals(attribute_names=None, **kwargs):
             links.new(trafo.outputs[0], mixer_sockets[j + 3 * i])
 
     return mat
-
 
 def create_material_from_geometry_attribute(bob, attr_name='', **kwargs):
     """
@@ -1038,7 +1680,6 @@ def create_material_from_geometry_attribute(bob, attr_name='', **kwargs):
     for slot in bob.ref_obj.material_slots:
         slot.material.blend_method = 'HASHED'
         slot.material.shadow_method = 'HASHED'
-
 
 def region_indicator(region_functions=['x,1,<', 'x,1,>'], colors=['text', 'background'],
                      name=None, parameters=[], scalar_parameters=[], **kwargs):
@@ -1110,7 +1751,6 @@ def region_indicator(region_functions=['x,1,<', 'x,1,>'], colors=['text', 'backg
         links.new(fcn_nodes[0].outputs[0], alpha_factor.inputs[1])
 
     return customize_material(mat, **kwargs)
-
 
 def instance_indicator_material(colors=['drawing', 'important'],
                                 name='Indicator', **kwargs):
@@ -1219,7 +1859,6 @@ def instance_indicator_material(colors=['drawing', 'important'],
 
     return mat
 
-
 def mandelbrot_indicator_material(colors=['drawing', 'important'], name='MandelBrotSetIndicator', **kwargs):
     """
     create a material that indicates the location inside or outside the Mandelbrot set
@@ -1311,7 +1950,6 @@ def mandelbrot_indicator_material(colors=['drawing', 'important'], name='MandelB
         links.new(object_node.outputs['Location'], indicator.inputs['In'])
 
     return mat
-
 
 def make_complex_function_material(bob, functions, shape=True, name='complex_material', **kwargs):
     """
@@ -1452,7 +2090,6 @@ def make_complex_function_material(bob, functions, shape=True, name='complex_mat
 
     return mixer_dialers
 
-
 def make_transformations_and_complex_material(bob, transformations, name='complex_material'):
     """
     allows for arbitrary vertex transformations
@@ -1578,7 +2215,6 @@ def make_transformations_and_complex_material(bob, transformations, name='comple
 
     return mixer_dialers
 
-
 def make_conformal_transformation_material(bob, conformal_transformations, name='complex_material'):
     """
     add texture that color-codes the phases of a complex bobject
@@ -1691,7 +2327,6 @@ def make_conformal_transformation_material(bob, conformal_transformations, name=
 
     return mixer_dialers
 
-
 def make_solid_material(bob, color_index):
     mat_name = "solid_" + str(color_index + 1)
 
@@ -1710,7 +2345,6 @@ def make_solid_material(bob, color_index):
         ref.data.materials.append(material)
     else:
         ref.material_slots[0].material = material
-
 
 def make_glossy_material(bob, color_index):
     mat_name = "glossy_" + str(color_index + 1)
@@ -1738,7 +2372,6 @@ def make_glossy_material(bob, color_index):
     else:
         ref.material_slots[0].material = material
 
-
 def make_basic_material(rgb=None, name=None):
     if rgb is None or name is None:
         raise Warning('Need rgb and name to make basic color')
@@ -1751,7 +2384,6 @@ def make_basic_material(rgb=None, name=None):
     nodes = color.node_tree.nodes
     nodes['Principled BSDF'].inputs['Base Color'].default_value = rgb
     color.diffuse_color = rgb
-
 
 def make_fake_glass_material(rgb=None, name=None, absorption_density=0.5, ior=1):
     if rgb is None or name is None:
@@ -1789,7 +2421,7 @@ def make_fake_glass_material(rgb=None, name=None, absorption_density=0.5, ior=1)
     bsdf.inputs['Metallic'].default_value = 0
     bsdf.inputs[TRANSMISSION].default_value = 1
     bsdf.inputs['IOR'].default_value = ior  # no refraction
-    #bsdf.inputs['Sheen Tint'].default_value = [1, 1, 1, 1]
+    # bsdf.inputs['Sheen Tint'].default_value = [1, 1, 1, 1]
 
     links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
 
@@ -1802,7 +2434,6 @@ def make_fake_glass_material(rgb=None, name=None, absorption_density=0.5, ior=1)
     out.location = (400, 0)
     bsdf.location = (-400, 0)
     color.diffuse_color = rgb
-
 
 def make_plastic_material(rgb=None, name=None):
     if rgb is None or name is None:
@@ -1819,8 +2450,7 @@ def make_plastic_material(rgb=None, name=None):
     # bsdf.inputs['Subsurface Color'].default_value=rgb
     bsdf.inputs[SPECULAR].default_value = 1
     bsdf.inputs['Roughness'].default_value = 0.1
-    # bsdf.inputs['Specular Tint'].default_value=0.5
-
+    # bsdf.inputs['Specular Tint'].default_value=0.
 
 def make_checker_material():
     color = bpy.data.materials.new(name='checker')
@@ -1834,7 +2464,6 @@ def make_checker_material():
     color.node_tree.links.new(checker.outputs['Color'], nodes['Principled BSDF'].inputs['Base Color'])
     color.node_tree.links.new(input.outputs['Position'], checker.inputs['Vector'])
 
-
 def make_mirror_material():
     color = bpy.data.materials.new(name='mirror')
     color.use_nodes = True
@@ -1845,7 +2474,6 @@ def make_mirror_material():
     bsdf.inputs['Metallic'].default_value = 1
     bsdf.inputs['Roughness'].default_value = 0
     bsdf.inputs['IOR'].default_value = 0
-
 
 def make_magnet_material():
     for name in {"maget", "magnetX", "magnetY"}:
@@ -1952,7 +2580,6 @@ def make_magnet_material():
         coords.location = (-1200, 0)
         links.new(coords.outputs['Generated'], sep_xyz.inputs['Vector'])
 
-
 def make_sign_material():
     material = bpy.data.materials.new(name="sign")
     material.use_nodes = True
@@ -1988,7 +2615,6 @@ def make_sign_material():
     val.location = (-700, 0)
     links.new(val.outputs['Value'], range.inputs['Value'])
 
-
 def make_sand_material():
     color = bpy.data.materials.new(name='sand')
     color.use_nodes = True
@@ -2022,7 +2648,6 @@ def make_sand_material():
     links.new(coords.outputs['Generated'], wave.inputs['Vector'])
     links.new(coords.outputs['Generated'], noise.inputs['Vector'])
 
-
 def make_silk_material():
     color = bpy.data.materials.new(name='silk')
     color.use_nodes = True
@@ -2051,6 +2676,34 @@ def make_silk_material():
     coords = nodes.new(type='ShaderNodeTexCoord')
     links.new(coords.outputs['UV'], mapping.inputs['Vector'])
 
+def make_cloud_material():
+    color=bpy.data.materials.new(name='clouds')
+    color.use_nodes=True
+    nodes=color.node_tree.nodes
+    links=color.node_tree.links
+    bsdf=nodes['Principled BSDF']
+    nodes.remove(bsdf)
+
+    noise = nodes.new(type='ShaderNodeTexNoise')
+    noise.inputs['Scale'].default_value = 1.8
+    noise.inputs['Detail'].default_value = 9.2
+    noise.inputs['Roughness'].default_value = 0.1
+    noise.inputs['Distortion'].default_value = 6.4
+
+    ramp = nodes.new(type='ShaderNodeValToRGB')
+    ramp.color_ramp.elements[0].position = 0.3
+    links.new(noise.outputs['Fac'], ramp.inputs['Fac'])
+    div= nodes.new(type='ShaderNodeMath')
+    div.label="CloudDensityFactor"
+    div.name="CloudDensityFactor"
+    div.operation='DIVIDE'
+    div.inputs[1].default_value=100
+    links.new(ramp.outputs['Color'],div.inputs[0])
+
+    absorption = nodes.new(type='ShaderNodeVolumeAbsorption')
+    links.new(div.outputs[0],absorption.inputs['Density'])
+    mat = nodes.get('Material Output')
+    links.new(absorption.outputs['Volume'],mat.inputs['Volume'])
 
 def make_gold_material():
     color = bpy.data.materials.new(name='gold')
@@ -2091,7 +2744,6 @@ def make_gold_material():
     links.new(coords.outputs['Object'], noise.inputs['Vector'])
     links.new(coords.outputs['Object'], noise2.inputs['Vector'])
 
-
 def make_screen_material():
     color = bpy.data.materials.new(name='screen')
     color.use_nodes = True
@@ -2117,7 +2769,6 @@ def make_screen_material():
     coords = nodes.new(type='ShaderNodeTexCoord')
     coords.location = (-600, 0)
     links.new(coords.outputs['Generated'], movie.inputs['Vector'])
-
 
 def make_silver_material():
     color = bpy.data.materials.new(name='silver')
@@ -2163,7 +2814,6 @@ def make_silver_material():
     links.new(coords.outputs['Generated'], noise.inputs['Vector'])
     links.new(coords.outputs['Generated'], noise2.inputs['Vector'])
 
-
 def make_scattering_material(**kwargs):
     color = bpy.data.materials.new(name='scatter_volume')
     color.use_nodes = True
@@ -2183,7 +2833,6 @@ def make_scattering_material(**kwargs):
     links.new(scatter.outputs['Volume'], material.inputs['Volume'])
 
     return color
-
 
 def make_marble_material():
     color = bpy.data.materials.new(name='marble')
@@ -2223,11 +2872,45 @@ def make_marble_material():
     coords = nodes.new(type='ShaderNodeTexCoord')
     links.new(coords.outputs['Generated'], noise2.inputs['Vector'])
 
-
 def make_metal_materials():
     for i in range(1, 10):
         gray = i / 10
         make_metal_material(gray=gray)
+
+def make_six_color_ramp_material(**kwargs):
+    color = bpy.data.materials.new(name='six_color_ramp')
+    color.use_nodes = True
+    nodes = color.node_tree.nodes
+    links = color.node_tree.links
+    bsdf = nodes['Principled BSDF']
+    bsdf.inputs[SPECULAR].default_value = 1
+    bsdf.inputs['Roughness'].default_value = 0.5
+
+    ramp = nodes.new(type='ShaderNodeValToRGB')
+    ramp.color_ramp.elements[0].position = 0
+    ramp.color_ramp.elements[0].color = get_color('yellow')
+    ramp.color_ramp.elements[1].position = 0.2
+    ramp.color_ramp.elements[1].color = get_color('green')
+    ramp.color_ramp.elements.new(0.4)
+    ramp.color_ramp.elements[2].color = get_color('text')
+    ramp.color_ramp.elements.new(0.6)
+    ramp.color_ramp.elements[3].color = get_color('orange')
+    ramp.color_ramp.elements.new(0.8)
+    ramp.color_ramp.elements[4].color = get_color('blue')
+    ramp.color_ramp.elements.new(1)
+    ramp.color_ramp.elements[5].color = get_color('red')
+
+    links.new(ramp.outputs['Color'], bsdf.inputs['Base Color'])
+    links.new(ramp.outputs['Color'], bsdf.inputs[EMISSION])
+
+    attr = nodes.new('ShaderNodeAttribute')
+    attr.attribute_name = 'FaceIndex'
+
+    div = nodes.new('ShaderNodeMath')
+    div.operation = 'DIVIDE'
+    div.inputs[1].default_value = 5
+    links.new(attr.outputs['Fac'], div.inputs[0])
+    links.new(div.outputs['Value'], ramp.inputs['Fac'])
 
 
 def make_metal_material(gray=0.5):
@@ -2238,7 +2921,6 @@ def make_metal_material(gray=0.5):
     bsdf.inputs['Metallic'].default_value = 1
     bsdf.inputs['Roughness'].default_value = 0.1
     bsdf.inputs['Base Color'].default_value = [gray, gray, gray, 1]
-
 
 def make_wood_material():
     color = bpy.data.materials.new(name='wood')
@@ -2300,7 +2982,6 @@ def make_wood_material():
     coords = nodes.new(type='ShaderNodeTexCoord')
     links.new(coords.outputs['Generated'], mapping.inputs['Vector'])
 
-
 def make_creature_material(rgb=None, name=None):
     if rgb is None or name is None:
         raise Warning('Need rgb and name to make creature color')
@@ -2317,7 +2998,6 @@ def make_creature_material(rgb=None, name=None):
 
     # which doesn't take alpha
     color.diffuse_color = rgb
-
 
 def make_translucent_material(rgb=None, name=None):
     if rgb is None or name is None:
@@ -2370,7 +3050,6 @@ def make_translucent_material(rgb=None, name=None):
     glass = nodes.new(type='ShaderNodeBsdfGlass')
     glass.inputs['Color'].default_value = [1, 1, 1, 1]
     color.node_tree.links.new(glass.outputs['BSDF'], shader1.inputs[2])
-
 
 def mandel_on_riemann_sphere(**kwargs):
     if 'iterations' in kwargs:
@@ -2612,7 +3291,6 @@ def mandel_on_riemann_sphere(**kwargs):
 
     return material
 
-
 def coarse_graining(bob, **kwargs):
     obj = get_obj(bob)
     # select the channel that should be coarse grained
@@ -2676,7 +3354,6 @@ def coarse_graining(bob, **kwargs):
 
     return material
 
-
 def monte_carlo_mandel(bob, **kwargs):
     obj = get_obj(bob)
 
@@ -2692,7 +3369,6 @@ def monte_carlo_mandel(bob, **kwargs):
     # for cycles
     material.cycles.displacement_method = 'DISPLACEMENT'  # for real displacement
     material.use_nodes = True
-
 
 def penrose_material(base_color, contrast=1, **kwargs):
     material = bpy.data.materials.new(name='Penrose')
@@ -2788,13 +3464,11 @@ def penrose_material(base_color, contrast=1, **kwargs):
 
     return material
 
-
 def material_clean_up():
     # Function for removing some duplicate materials from repeated imports
     for mat in bpy.data.materials:
         if 'color' not in mat.name:
             bpy.data.materials.remove(mat)
-
 
 def get_alpha_of_material(material):
     if isinstance(material, str):
@@ -2803,11 +3477,75 @@ def get_alpha_of_material(material):
     bsdf = nodes.get('Principled BSDF')
     return bsdf.inputs['Alpha']
 
+def highlighting_for_material(page_material, direction='Y', data={(0, 1): ('drawing', 0.5)}):
+    """
+
+    """
+    tree = page_material.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    mapping_node = nodes.get("Mapping")
+    if mapping_node is None:
+        # create texture coordinates with mapping node
+        tex_coord = TextureCoordinate(tree, location=(-10, 0))
+        mapping_node = Mapping(tree, location=(-9, 0))
+        links.new(tex_coord.std_out, mapping_node.inputs['Vector'])
+        mapping_out = mapping_node.std_out
+    else:
+        mapping_out = mapping_node.outputs[0]
+    left = -8
+    sep = SeparateXYZ(tree, location=(left, 0), vector=mapping_out)
+    if direction == 'X':
+        sep_out = sep.std_out_x
+    elif direction == 'Y':
+        sep_out = sep.std_out_y
+    else:
+        sep_out = sep.std_out_z
+    left += 1
+
+    top = len(data) * 2.5
+    mixers = []
+    for key, val in data.items():
+        lleft = left
+        infimum = key[0]
+        supremum = key[1]
+        filter = make_function(tree, functions={
+            "filter": "coord," + str(infimum) + ",>,coord," + str(supremum) + ",<,*"
+        }, location=(lleft, top), scalars=["filter", "coord"], inputs=["coord"], outputs=["filter"],
+                               node_group_type='Shader')
+        links.new(sep_out, filter.inputs['coord'])
+        lleft += 1
+
+        ramp = ColorRamp(tree, location=(lleft, top), factor=filter.outputs['filter'])
+        ramp.color_ramp.elements[0].color = [0, 0, 0, 0]
+        ramp.color_ramp.elements[1].color = get_color(val[0])
+        lleft += 1
+
+        if len(mixers) == 0:
+            mix = MixRGB(tree, location=(lleft, top - 2), factor=val[1], color1=ramp.std_out)
+        else:
+            mix = MixRGB(tree, location=(lleft, top - 2), factor=val[1], color1=mixers[-1].std_out)
+            links.new(ramp.std_out, mixers[-1].color2)
+        mixers.append(mix)
+        top -= 2.5
+
+    # find link to the color socket of the bsdf
+    bsdf = nodes.get("Principled BSDF")
+    if bsdf is not None:
+        for link in links:
+            if link.to_node == bsdf:
+                if link.to_socket.name == 'Base Color':
+                    from_socket = link.from_socket
+        if from_socket is not None:
+            links.new(mixers[-1].color2, from_socket)
+            links.new(mixers[-1].std_out, bsdf.inputs['Base Color'])
+            links.new(mixers[-1].std_out, bsdf.inputs[EMISSION])
+
+    return mixers
 
 #################
 # backgrounds ###
 #################
-
 
 def set_sky_background(**kwargs):
     # remove lights
@@ -2838,10 +3576,21 @@ def set_sky_background(**kwargs):
     sky.dust_density = dust
     sky.ozone_density = ozone
 
+    sun_disc=get_from_kwargs(kwargs, 'sun_disc', False)
+    sky.sun_disc = sun_disc
+
+    sun_rotation = get_from_kwargs(kwargs, 'sun_rotation', 0)
+    sky.sun_rotation = sun_rotation
+
+    sun_elevation = get_from_kwargs(kwargs, 'sun_elevation', 0)
+    sky.sun_elevation = sun_elevation
+
     background = nodes.get("Background")
     background.location = (0, 0)
 
+    strength = get_from_kwargs(kwargs, 'strength', 1)
+    background.inputs['Strength'].default_value = strength
     links.new(sky.outputs['Color'], background.inputs['Color'])
     links.new(background.outputs['Background'], out.inputs["Surface"])
 
-    animate_sky_background(sky, **kwargs)
+    animate_sky_background(**kwargs)

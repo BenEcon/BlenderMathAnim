@@ -1,9 +1,16 @@
 import numpy as np
 
+from geometry_nodes.geometry_nodes_modifier import LogoModifier
+from interface import ibpy
+from interface.ibpy import create_mesh
 from objects.bobject import BObject
 from objects.circle import Circle, Circle2
 from objects.coordinate_system import CoordinateSystem
+from objects.cube import Cube
+from objects.geometry.sphere import Sphere
 from utils.constants import DEFAULT_ANIMATION_TIME
+from utils.kwargs import get_from_kwargs
+
 
 def logo_curve(t=0,n=20):
     """draws the logo when the parameter runs from -pi to pi"""
@@ -151,7 +158,6 @@ class Logo(CoordinateSystem):
     def get_world_matrix(self):
         return self.ref_obj.matrix_world
 
-
 class LogoPreImage(BObject):
     def __init__(self,**kwargs):
         self.kwargs = kwargs
@@ -189,11 +195,176 @@ class LogoPreImage(BObject):
         t0 = begin_time
         delta = int(len(self.b_children)/3)
         for i in range(delta):
-            self.b_children[i].grow(begin_time=t0,transition_time=dt)
-            self.b_children[i+delta].grow(begin_time=t0,transition_time=dt)
-            self.b_children[i+2*delta].grow(begin_time=t0,transition_time=dt)
+            self.b_children[i].grow(begin_time=t0, transition_time=dt)
+            self.b_children[i + delta].grow(begin_time=t0, transition_time=dt)
+            self.b_children[i + 2 * delta].grow(begin_time=t0, transition_time=dt)
             t0+=dt
 
     def transform(self,transformation, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME):
         for child in self.b_children:
             child.transform(transformation,begin_time=begin_time,transition_time=transition_time)
+
+class GeometryLogo(BObject):
+    def __init__(self,n=20,**kwargs):
+
+        circle1_vertices = []
+        circle2_vertices = []
+        circle3_vertices = []
+
+        for i in range(0, n + 1):
+            den = 2 + i * i
+            r = 1 / den
+            x = 2 * i / den
+            y = 3 / den
+            circle1_vertices.append([x, y, r])
+
+            if i > 0:
+                den = 2 + i * i
+                r = 1 / den
+                x = -2 * i / den
+                y = 3 / den
+                circle1_vertices.append([x, y, r])
+
+        for i in range(1, n + 1):
+            den = 6 + 4 * i * (i - 1)
+            r = 1 / den
+            x = (8 * i - 4) / den
+            y = 9 / den
+            circle2_vertices.append([x, y, r])
+
+            j = i - 1
+            den = 6 + 4 * j * (j + 1)
+            r = 1 / den
+            x = (-8 * j - 4) / den
+            y = 9 / den
+            circle2_vertices.append([x, y,r])
+
+        for i in range(1, n + 1):
+            den = 15 + 4 * i * (i - 1)
+            r = 1 / den
+            x = (8 * i - 4) / den
+            y = 15 / den
+            circle3_vertices.append([x, y, r])
+            j = i - 1
+            den = 15 + 4 * j * (j + 1)
+            r = 1 / den
+            x = (-8 * j - 4) / den
+            y = 15 / den
+            circle3_vertices.append([x, y, r])
+
+        circles1 =BObject(mesh=create_mesh(vertices=circle1_vertices,name="Circle1Mesh"),name="RedCircles")
+        circles2 =BObject(mesh=create_mesh(vertices=circle2_vertices,name="Circle1Mesh"),name="GreenCircles")
+        circles3 =BObject(mesh=create_mesh(vertices=circle3_vertices,name="Circle1Mesh"),name="BlueCircles")
+
+        cube = Cube()
+
+        super().__init__(obj=cube.ref_obj, children = [circles1,circles2,circles3],name="Logo",**kwargs)
+        self.logo_modifier = LogoModifier(**kwargs)
+        self.add_mesh_modifier(type="NODES", node_modifier=self.logo_modifier)
+
+
+    def appear(self,alpha=1, begin_time=0, transition_time=DEFAULT_ANIMATION_TIME,
+               clear_data=False, silent=False,linked=False, nice_alpha=False,children=False,**kwargs):
+        return super().appear(alpha=alpha,begin_time=begin_time,transition_time=transition_time,clear_data=clear_data,
+                              silent=silent,linked=linked,nice_alpha=nice_alpha,children=children,**kwargs)
+
+class LogoFromInstances(BObject):
+    def __init__(self, details=2, instance_red=Sphere, instance_green=Sphere, instance_blue=Sphere,
+                 kwargs_red={"color":"important"},kwargs_green={"color":"joker"},kwargs_blue={"color":"drawing"}, **kwargs):
+        """
+        Create a logo with custom instances
+        """
+        self.kwargs = kwargs
+        self.name = get_from_kwargs(kwargs,"name","LogoFromInstances")
+
+        instance=get_from_kwargs(kwargs,"instance",None)
+        if instance is not None:
+            instance_red = instance
+            instance_green = instance
+            instance_blue = instance
+
+        self.begin_times = None
+        self.red_instances = []
+        self.blue_instances = []
+        self.green_instances = []
+
+        self.scale = get_from_kwargs(kwargs,"scale",[1]*3)
+        if isinstance(self.scale,float):
+            self.scale = [self.scale]*3
+
+        for i in range(0, details + 1):
+            den = 2 + i * i
+            r = 1 / den
+            x = 2 * i / den
+            y = 3 / den
+            self.red_instances.append(instance_red(location=[x, y, 0],
+                                             name='red_' + str(i),**kwargs_red,scale=[r]*3))
+
+            if i > 0:
+                den = 2 + i * i
+                r = 1 / den
+                x = -2 * i / den
+                y = 3 / den
+                self.red_instances.append(instance_red(location=[x, y, 0],
+                                                       name='red_-' + str(i), **kwargs_red, scale=[r] * 3))
+
+        for i in range(1, details + 1):
+            den = 6 + 4 * i * (i - 1)
+            r = 1 / den
+            x = (8 * i - 4) / den
+            y = 9 / den
+            self.green_instances.append(instance_green(location=[x, y, 0],
+                                                   name='green_' + str(i), **kwargs_green, scale=[r] * 3))
+
+            j = i - 1
+            den = 6 + 4 * j * (j + 1)
+            r = 1 / den
+            x = (-8 * j - 4) / den
+            y = 9 / den
+            self.green_instances.append(instance_green( location=[x, y, 0],
+                                                   name='green_-' + str(i), **kwargs_green, scale=[r] * 3))
+
+        for i in range(1, details + 1):
+            den = 15 + 4 * i * (i - 1)
+            r = 1 / den
+            x = (8 * i - 4) / den
+            y = 15 / den
+            self.blue_instances.append(instance_blue( location=[x, y, 0],
+                                                   name='blue_' + str(i), **kwargs_blue, scale=[r] * 3))
+            j = i - 1
+            den = 15 + 4 * j * (j + 1)
+            r = 1 / den
+            x = (-8 * j - 4) / den
+            y = 15 / den
+            self.blue_instances.append(instance_blue( location=[x, y, 0],
+                                                     name='blue_-' + str(i), **kwargs_blue, scale=[r] * 3))
+
+        super().__init__(children=self.blue_instances+self.red_instances+self.green_instances,
+                         name= self.name, **kwargs)
+
+    def get_instances(self):
+        return self.red_instances+self.green_instances+self.blue_instances
+
+    def get_red_instances(self):
+        return self.red_instances
+
+    def get_green_instances(self):
+        return self.green_instances
+
+    def get_blue_instances(self):
+        return self.blue_instances
+
+    def appear(self,begin_time=0,
+               transition_time=DEFAULT_ANIMATION_TIME,
+               **kwargs):
+        super().appear(begin_time=begin_time,transition_time=transition_time)
+        for child in self.b_children:
+            child.appear(begin_time=begin_time, transition_time=transition_time)
+        return begin_time + transition_time
+
+    def grow(self,begin_time=0,transition_time=DEFAULT_ANIMATION_TIME):
+        self.appear(begin_time=begin_time,transition_time=transition_time)
+        super().grow(scale=self.scale, begin_time=begin_time,transition_time=0)
+        for child in self.b_children:
+            child.grow(scale=child.scale, begin_time=begin_time, transition_time=transition_time)
+        return begin_time+transition_time

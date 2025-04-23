@@ -8,12 +8,26 @@ from itertools import combinations
 import numpy as np
 import sympy
 from numpy.linalg import matrix_rank, solve
-from numpy.linalg.linalg import LinAlgError
+from numpy.linalg import LinAlgError
 from scipy.spatial import ConvexHull
 
 from interface.ibpy import Vector
 
+def factorial(n:int)->int:
+    """
+    Computes the factorial of an integer
+    >>> factorial(8)
+    40320
+    """
+    if n==0 or n==1:
+        return 1
+    return n*factorial(n-1)
+
 def choose(lst,choice):
+    '''
+    >>> choose(list(range(5)),2)
+    [[0, 1], [0, 2], [0, 3], [0, 4], [1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 4]]
+    '''
     return  [list(i) for i in combinations(lst, choice)]
 
 def tuples(lst, dim):
@@ -47,7 +61,6 @@ def partition(lst, size, step, wrap=0):
     tmp = lst + lst[0:wrap]
     return [tmp[i:(i + size)] for i in range(0, len(tmp) - size + 1, step)]
 
-
 def random_points(dim=3, n=10, domain=10, seed=None):
     """
     returns a list of tuples of random points
@@ -69,7 +82,6 @@ def random_points(dim=3, n=10, domain=10, seed=None):
         return [t + tuple([-domain + np.random.random() * 2 * domain]) for t in
                 random_points(dim - 1, n=n, domain=domain, seed=seed)]
 
-
 def unit_tuples(dim):
     return [tuple(v) for v in np.identity(dim)]
 
@@ -82,7 +94,7 @@ def identity_matrix(dim,unit=1,zero=0):
     [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     """
     if zero==0:
-        return np.identiy(dim)
+        return np.identity(dim)
     result = []
     for row in np.identity(dim):
         res_row = []
@@ -245,6 +257,7 @@ def find_closest(point_list,point):
             dist=next_dist
 
     return closest
+
 
 if __name__ == '__main__':
     import doctest
